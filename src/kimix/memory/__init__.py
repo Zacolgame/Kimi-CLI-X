@@ -1,12 +1,15 @@
 """Agent Memory System - Tiered memory architecture for Kimi Agent."""
 
-from kimix.memory.types import MemoryEntry, MemoryType
-from kimix.memory.embedding import EmbeddingProvider
-from kimix.memory.working_memory import WorkingMemory
-from kimix.memory.short_term_memory import ShortTermMemory
-from kimix.memory.long_term_memory import LongTermMemory
-from kimix.memory.retrieval import NgramTokenizer, InvertedIndex, BM25Scorer, Searcher
-from kimix.memory.system import AgentMemorySystem
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from kimix.memory.types import MemoryEntry, MemoryType
+    from kimix.memory.embedding import EmbeddingProvider
+    from kimix.memory.working_memory import WorkingMemory
+    from kimix.memory.short_term_memory import ShortTermMemory
+    from kimix.memory.long_term_memory import LongTermMemory
+    from kimix.memory.retrieval import NgramTokenizer, InvertedIndex, BM25Scorer, Searcher
+    from kimix.memory.system import AgentMemorySystem
 
 __all__ = [
     "MemoryEntry",
@@ -21,3 +24,30 @@ __all__ = [
     "Searcher",
     "AgentMemorySystem",
 ]
+
+_IMPORT_MAP = {
+    "MemoryEntry": "kimix.memory.types",
+    "MemoryType": "kimix.memory.types",
+    "EmbeddingProvider": "kimix.memory.embedding",
+    "WorkingMemory": "kimix.memory.working_memory",
+    "ShortTermMemory": "kimix.memory.short_term_memory",
+    "LongTermMemory": "kimix.memory.long_term_memory",
+    "NgramTokenizer": "kimix.memory.retrieval",
+    "InvertedIndex": "kimix.memory.retrieval",
+    "BM25Scorer": "kimix.memory.retrieval",
+    "Searcher": "kimix.memory.retrieval",
+    "AgentMemorySystem": "kimix.memory.system",
+}
+
+
+def __getattr__(name: str) -> object:
+    if name in _IMPORT_MAP:
+        import importlib
+
+        module = importlib.import_module(_IMPORT_MAP[name])
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return __all__

@@ -32,21 +32,21 @@ class TestRememberTool:
     @pytest.mark.asyncio
     async def test_remember_long_term(self):
         tool = Remember()
-        result = await tool(Remember.params(content="test fact", importance=8.0, tier="long_term"))
-        assert not result.is_error
-        assert "Remembered" in result.output
-
-    @pytest.mark.asyncio
-    async def test_remember_short_term(self):
-        tool = Remember()
-        result = await tool(Remember.params(content="test observation", importance=5.0, tier="short_term"))
+        result = await tool(Remember.params(content="test fact", importance=8.0, long_term=True))
         assert not result.is_error
         assert "Perceived" in result.output
 
     @pytest.mark.asyncio
+    async def test_remember_short_term(self):
+        tool = Remember()
+        result = await tool(Remember.params(content="test observation", importance=5.0, long_term=False))
+        assert not result.is_error
+        assert "Remembered" in result.output
+
+    @pytest.mark.asyncio
     async def test_remember_empty_content(self):
         tool = Remember()
-        result = await tool(Remember.params(content="", importance=5.0))
+        result = await tool(Remember.params(content="", importance=5.0, long_term=False))
         assert not result.is_error
         assert "Remembered" in result.output
 

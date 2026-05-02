@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import heapq
 import math
 import pickle
 import unicodedata
@@ -16,6 +18,8 @@ from numpy.typing import NDArray
 class NgramTokenizer:
     """Overlapping n-gram generator with text normalization."""
 
+    __slots__ = ("n",)
+
     def __init__(self, n: int = 2) -> None:
         self.n = n
 
@@ -29,20 +33,25 @@ class NgramTokenizer:
         cp = ord(char)
         return (
             (0x4E00 <= cp <= 0x9FFF)          # CJK Unified Ideographs
-            or (0x3400 <= cp <= 0x4DBF)       # Extension A
-            or (0x20000 <= cp <= 0x2EBEF)     # Extensions B-F
             or (0xAC00 <= cp <= 0xD7AF)       # Hangul Syllables
             or (0x3040 <= cp <= 0x309F)       # Hiragana
             or (0x30A0 <= cp <= 0x30FF)       # Katakana
+            or (0x3400 <= cp <= 0x4DBF)       # Extension A
+            or (0x20000 <= cp <= 0x2EBEF)     # Extensions B-F
         )
 
     def _detect_n(self, text: str) -> int:
         """Auto-detect n-gram size: bigram for CJK, trigram for mixed/code."""
         if not text:
             return self.n
-        cjk_count = sum(1 for c in text if self._is_cjk(c))
-        if cjk_count > len(text) * 0.3:
-            return 2
+        cjk_count = 0
+        threshold = len(text) * 0.3
+        is_cjk = self._is_cjk
+        for c in text:
+            if is_cjk(c):
+                cjk_count += 1
+                if cjk_count > threshold:
+                    return 2
         return 3 if self.n < 3 else self.n
 
     def tokenize(self, text: str, n: int | None = None) -> list[str]:
@@ -59,10 +68,23 @@ class NgramTokenizer:
 class InvertedIndex:
     """Inverted index: build, persist, and load."""
 
+    __slots__ = (
+        "_term_to_id",
+        "_temp_postings",
+        "_doc_lengths",
+        "_doc_lengths_arr",
+        "_N",
+        "_avgdl",
+        "_posting_docs",
+        "_posting_tfs",
+        "_finalized",
+    )
+
     def __init__(self) -> None:
         self._term_to_id: dict[str, int] = {}
         self._temp_postings: dict[str, list[tuple[int, int]]] = defaultdict(list)
         self._doc_lengths: list[int] = []
+        self._doc_lengths_arr: NDArray[np.int32] = np.array([], dtype=np.int32)
         self._N: int = 0
         self._avgdl: float = 0.0
         # Finalized compact arrays
@@ -81,6 +103,10 @@ class InvertedIndex:
     @property
     def doc_lengths(self) -> list[int]:
         return self._doc_lengths
+
+    @property
+    def doc_lengths_arr(self) -> NDArray[np.int32]:
+        return self._doc_lengths_arr
 
     def add_document(self, doc_id: int, tokens: list[str]) -> None:
         """Add a document's tokens to the index."""
@@ -130,6 +156,8 @@ class InvertedIndex:
         self._term_to_id = kept_terms
         if self._doc_lengths:
             self._avgdl = sum(self._doc_lengths) / len(self._doc_lengths)
+            self._doc_lengths_arr = np.array(self._doc_lengths, dtype=np.int32)
+        self._temp_postings.clear()
         self._finalized = True
 
     def get_postings(
@@ -185,11 +213,14 @@ class InvertedIndex:
         self._doc_lengths = data["doc_lengths"]
         self._N = data["N"]
         self._avgdl = data["avgdl"]
+        self._doc_lengths_arr = np.array(self._doc_lengths, dtype=np.int32)
         self._finalized = True
 
 
 class BM25Scorer:
     """BM25 relevance scorer over an :class:`InvertedIndex`."""
+
+    __slots__ = ("index", "k1", "b")
 
     def __init__(
         self,
@@ -222,6 +253,18 @@ class BM25Scorer:
         if N == 0 or avgdl == 0:
             return {}
 
+        doc_lengths = self.index.doc_lengths_arr
+        k1 = self.k1
+        b = self.b
+        k1_plus_1 = k1 + 1.0
+        one_minus_b = 1.0 - b
+        b_over_avgdl = b / avgdl
+
+        cand_mask: NDArray[np.bool_] | None = None
+        if candidate_docs is not None:
+            cand_mask = np.zeros(N, dtype=bool)
+            cand_mask[list(candidate_docs)] = True
+
         for token in query_tokens:
             postings = self.index.get_postings(token)
             if postings is None:
@@ -229,21 +272,36 @@ class BM25Scorer:
             docs, tfs = postings
             df = len(docs)
             idf = self._idf(df, N)
-            for doc_id, tf in zip(docs, tfs):
-                doc_id_int = int(doc_id)
-                if candidate_docs is not None and doc_id_int not in candidate_docs:
+
+            if cand_mask is not None:
+                valid = cand_mask[docs]
+                if not np.any(valid):
                     continue
-                dl = self.index.doc_lengths[doc_id_int]
-                denom = float(tf) + self.k1 * (1.0 - self.b + self.b * dl / avgdl)
-                if denom == 0:
+                docs = docs[valid]
+                tfs = tfs[valid]
+
+            dls = doc_lengths[docs]
+            denom = tfs.astype(np.float64) + k1 * (one_minus_b + b_over_avgdl * dls)
+            valid = denom > 0
+            if not np.all(valid):
+                docs = docs[valid]
+                tfs = tfs[valid]
+                denom = denom[valid]
+                if len(docs) == 0:
                     continue
-                scores[doc_id_int] += idf * float(tf) * (self.k1 + 1.0) / denom
+
+            token_scores = idf * tfs.astype(np.float64) * k1_plus_1 / denom
+            sc = scores
+            for doc_id, score_val in zip(docs, token_scores):
+                sc[int(doc_id)] += float(score_val)
 
         return dict(scores)
 
 
 class LevenshteinAutomaton:
     """Damerau-Levenshtein automaton for fuzzy term expansion."""
+
+    __slots__ = ("pattern", "max_edits", "prefix_length")
 
     def __init__(
         self,
@@ -265,11 +323,13 @@ class LevenshteinAutomaton:
             return 1
         return 2
 
-    def _damerau_levenshtein(self, s: str, t: str) -> int:
+    @staticmethod
+    @functools.lru_cache(maxsize=2048)
+    def _damerau_levenshtein(s: str, t: str) -> int:
         """Compute Damerau-Levenshtein distance between *s* and *t*."""
         m, n = len(s), len(t)
         if m < n:
-            return self._damerau_levenshtein(t, s)
+            return LevenshteinAutomaton._damerau_levenshtein(t, s)
         if n == 0:
             return m
 
@@ -298,23 +358,40 @@ class LevenshteinAutomaton:
     def match(self, dictionary: Iterable[str], max_expansions: int = 50) -> list[str]:
         """Walk *dictionary* and collect up to *max_expansions* matches."""
         results: list[str] = []
+        pattern_len = len(self.pattern)
+        max_edits = self.max_edits
+        prefix_length = self.prefix_length
+        prefix = self.pattern[:prefix_length] if prefix_length > 0 else ""
+        dl = self._damerau_levenshtein
+
         for term in dictionary:
             if len(results) >= max_expansions:
                 break
-            if self.prefix_length > 0:
-                if (
-                    len(term) >= self.prefix_length
-                    and len(self.pattern) >= self.prefix_length
-                    and term[: self.prefix_length] != self.pattern[: self.prefix_length]
-                ):
+            term_len = len(term)
+            if abs(term_len - pattern_len) > max_edits:
+                continue
+            if prefix_length > 0:
+                if term_len >= prefix_length and term[:prefix_length] != prefix:
                     continue
-            if self._damerau_levenshtein(self.pattern, term) <= self.max_edits:
+            if dl(self.pattern, term) <= max_edits:
                 results.append(term)
         return results
 
 
 class Searcher:
     """Query pipeline orchestrator: normalize -> tokenize -> score -> rank."""
+
+    __slots__ = (
+        "index",
+        "tokenizer",
+        "scorer",
+        "k1",
+        "b",
+        "min_should_match",
+        "fuzziness",
+        "max_expansions",
+        "prefix_length",
+    )
 
     def __init__(
         self,
@@ -394,5 +471,8 @@ class Searcher:
         if not scores:
             return []
 
-        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        if top_k * 10 < len(scores):
+            ranked = heapq.nlargest(top_k, scores.items(), key=lambda x: x[1])
+        else:
+            ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         return ranked[:top_k]

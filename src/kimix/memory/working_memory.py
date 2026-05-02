@@ -1,6 +1,7 @@
 """Working memory: current conversation context, limited capacity."""
 
 from collections import deque
+from itertools import islice
 from typing import List, Optional
 
 from kimix.memory.types import MemoryEntry, MemoryType
@@ -16,12 +17,15 @@ class WorkingMemory:
 
     def add(self, entry: MemoryEntry) -> None:
         """Add current context."""
-        self.items.append(entry)
         entry.memory_type = MemoryType.WORKING
+        self.items.append(entry)
 
     def get_context(self, n: int = 5) -> List[MemoryEntry]:
         """Get recent n context items."""
-        return list(self.items)[-n:]
+        if n <= 0:
+            return []
+        start = max(0, len(self.items) - n)
+        return list(islice(self.items, start, None))
 
     def clear(self) -> None:
         """Clear working memory."""
@@ -32,5 +36,6 @@ class WorkingMemory:
         """Generate current context summary."""
         if not self.items:
             return ""
-        contents = [item.content for item in self.items]
-        return " | ".join(contents[-3:])  # Simplified summary
+        start = max(0, len(self.items) - 3)
+        contents = (item.content for item in islice(self.items, start, None))
+        return " | ".join(contents)

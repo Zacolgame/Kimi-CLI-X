@@ -1,5 +1,6 @@
 """Memory system tool interface using CallableTool2 pattern."""
 
+import asyncio
 from typing import Any
 
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
@@ -11,13 +12,17 @@ from kimix.memory.types import MemoryType
 
 # Global memory system instance (initialized lazily)
 _memory_system: AgentMemorySystem | None = None
+_init_lock = asyncio.Lock()
 
 
-def _get_memory_system() -> AgentMemorySystem:
+async def _get_memory_system() -> AgentMemorySystem:
     """Get or initialize the global memory system instance."""
     global _memory_system
     if _memory_system is None:
-        _memory_system = AgentMemorySystem()
+        async with _init_lock:
+            # Double-checked locking to prevent race conditions
+            if _memory_system is None:
+                _memory_system = AgentMemorySystem()
     return _memory_system
 
 
@@ -26,7 +31,7 @@ class RememberParams(BaseModel):
     content: str = Field(description="The fact, knowledge, or observation to remember.")
     importance: float = Field(default=5.0, ge=0.0, le=10.0, description="Importance score (0-10).")
     tags: list[str] = Field(default_factory=list, description="Tags for categorization.")
-    memory_type: str = Field(default="semantic", description="Memory type: episodic, semantic, procedural, working.")
+    memory_type: MemoryType = Field(default=MemoryType.SEMANTIC, description="Memory type: episodic, semantic, procedural, working.")
     long_term: bool = Field(default=True, description="Memory tier to store in: False for 'short_term'.")
 
 
@@ -38,7 +43,7 @@ class Remember(CallableTool2):
 
     async def __call__(self, params: RememberParams) -> ToolReturnValue:
         try:
-            memory = _get_memory_system()
+            memory = await _get_memory_system()
             if params.long_term:
                 entry = memory.perceive(
                     observation=params.content,
@@ -47,12 +52,11 @@ class Remember(CallableTool2):
                 )
                 return ToolOk(output=f"Perceived: {entry.content[:100]}... (importance: {entry.importance})")
             else:
-                mt = MemoryType(params.memory_type) if params.memory_type else MemoryType.SEMANTIC
                 entry = memory.remember(
                     fact=params.content,
                     importance=params.importance,
                     tags=params.tags,
-                    memory_type=mt,
+                    memory_type=params.memory_type,
                 )
                 return ToolOk(output=f"Remembered: {entry.content[:100]}... (importance: {entry.importance})")
         except Exception as e:
@@ -77,21 +81,22 @@ class Recall(CallableTool2):
 
     async def __call__(self, params: RecallParams) -> ToolReturnValue:
         try:
-            memory = _get_memory_system()
+            memory = await _get_memory_system()
             results = memory.recall(
                 query=params.query,
                 context_size=params.context_size,
                 use_working=params.use_working,
                 use_short=params.use_short,
                 use_long=params.use_long,
-                tag_filter=params.tags if params.tags else None,
+                tag_filter=params.tags or None,
             )
             output_parts: list[str] = []
+            append = output_parts.append
             for tier, entries in results.items():
                 if entries:
-                    output_parts.append(f"\n=== {tier.upper()} ===")
+                    append(f"\n=== {tier.upper()} ===")
                     for e in entries:
-                        output_parts.append(f"- [{e.memory_type.value}] {e.content}")
+                        append(f"- [{e.memory_type.value}] {e.content}")
             output = "\n".join(output_parts) if output_parts else "No memories found."
             return ToolOk(output=output)
         except Exception as e:
@@ -112,7 +117,7 @@ class GetContext(CallableTool2):
 
     async def __call__(self, params: GetContextParams) -> ToolReturnValue:
         try:
-            memory = _get_memory_system()
+            memory = await _get_memory_system()
             context = memory.get_context_for_llm(params.query, max_tokens=params.max_tokens)
             return ToolOk(output=context)
         except Exception as e:
@@ -131,7 +136,7 @@ class Reflect(CallableTool2):
 
     async def __call__(self, params: ReflectParams) -> ToolReturnValue:
         try:
-            memory = _get_memory_system()
+            memory = await _get_memory_system()
             report = memory.reflect()
             return ToolOk(output=report)
         except Exception as e:

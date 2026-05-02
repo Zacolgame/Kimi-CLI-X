@@ -16,13 +16,13 @@ class TestEmbeddingProvider:
         provider = EmbeddingProvider(dim=384)
         vec1 = provider.embed("test text")
         vec2 = provider.embed("test text")
-        assert vec1 == vec2  # Cached / deterministic
+        assert np.array_equal(vec1, vec2)  # Cached / deterministic
 
     def test_embed_different_texts(self):
         provider = EmbeddingProvider(dim=384)
         vec1 = provider.embed("text one")
         vec2 = provider.embed("text two")
-        assert vec1 != vec2
+        assert not np.array_equal(vec1, vec2)
 
     def test_similarity_same_vector(self):
         provider = EmbeddingProvider(dim=384)

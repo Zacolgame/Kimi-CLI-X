@@ -1,7 +1,5 @@
 """Complete Agent memory system."""
 
-from typing import Dict, List
-
 from kimix.memory.types import MemoryEntry, MemoryType
 from kimix.memory.embedding import EmbeddingProvider
 from kimix.memory.working_memory import WorkingMemory
@@ -28,7 +26,7 @@ class AgentMemorySystem:
         self,
         observation: str,
         importance: float = 5.0,
-        tags: List[str] | None = None,
+        tags: list[str] | None = None,
         source: str = "environment",
     ) -> MemoryEntry:
         """Agent perceives input, stores in memory system."""
@@ -37,7 +35,7 @@ class AgentMemorySystem:
             memory_type=MemoryType.EPISODIC,
             importance=importance,
             tags=tags or [],
-            source=source
+            source=source,
         )
 
         # Enters both working and short-term memory
@@ -59,30 +57,31 @@ class AgentMemorySystem:
         use_working: bool = True,
         use_short: bool = True,
         use_long: bool = True,
-        tag_filter: List[str] | None = None,
-    ) -> Dict[str, List[MemoryEntry]]:
+        tag_filter: list[str] | None = None,
+    ) -> dict[str, list[MemoryEntry]]:
         """Multi-tier recall retrieval."""
-        results: Dict[str, List[MemoryEntry]] = {
-            'working': [],
-            'short_term': [],
-            'long_term': []
+        results: dict[str, list[MemoryEntry]] = {
+            "working": [],
+            "short_term": [],
+            "long_term": [],
         }
+
+        if context_size <= 0:
+            return results
 
         # Working memory: direct match of recent items
         if use_working:
-            working_items = self.working.get_context(context_size)
-            # Simple keyword match (working memory is usually small, return directly)
-            results['working'] = working_items
+            results["working"] = self.working.get_context(context_size)
 
         # Short-term memory: semantic search
         if use_short:
-            results['short_term'] = self.short_term.search(
+            results["short_term"] = self.short_term.search(
                 query, self.embedding_provider, top_k=context_size
             )
 
         # Long-term memory: semantic search
         if use_long:
-            results['long_term'] = self.long_term.retrieve(
+            results["long_term"] = self.long_term.retrieve(
                 query, top_k=context_size, tag_filter=tag_filter
             )
 
@@ -92,7 +91,7 @@ class AgentMemorySystem:
         self,
         fact: str,
         importance: float = 8.0,
-        tags: List[str] | None = None,
+        tags: list[str] | None = None,
         memory_type: MemoryType = MemoryType.SEMANTIC,
     ) -> MemoryEntry:
         """Actively memorize fact/knowledge."""
@@ -101,34 +100,40 @@ class AgentMemorySystem:
             importance=importance,
             tags=tags or [],
             memory_type=memory_type,
-            source="agent_learning"
+            source="agent_learning",
         )
 
     def get_context_for_llm(self, query: str, max_tokens: int = 2000) -> str:
         """Generate context prompt for LLM (RAG style)."""
         memories = self.recall(query, context_size=5)
 
-        context_parts: List[str] = []
+        context_parts: list[str] = []
         total_chars = 0
 
         # Priority: working > short-term > long-term
-        for source, entries in [
-            ("Current Focus", memories['working']),
-            ("Recent Events", memories['short_term']),
-            ("Relevant Knowledge", memories['long_term'])
-        ]:
+        for source, entries in (
+            ("Current Focus", memories["working"]),
+            ("Recent Events", memories["short_term"]),
+            ("Relevant Knowledge", memories["long_term"]),
+        ):
             if not entries:
                 continue
 
-            section = f"\n=== {source} ===\n"
+            header = f"\n=== {source} ===\n"
+            section_items: list[str] = []
+            section_len = len(header)
+
             for entry in entries:
                 item = f"- [{entry.memory_type.value}] {entry.content}\n"
-                if total_chars + len(section) + len(item) > max_tokens:
+                item_len = len(item)
+                if total_chars + section_len + item_len > max_tokens:
                     break
-                section += item
+                section_items.append(item)
+                section_len += item_len
 
-            context_parts.append(section)
-            total_chars += len(section)
+            if section_items:
+                context_parts.append(header + "".join(section_items))
+                total_chars += section_len
 
         return "\n".join(context_parts)
 

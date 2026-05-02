@@ -1,7 +1,7 @@
 """Embedding vector provider."""
 
-import hashlib
-from typing import Dict, List
+import zlib
+from typing import Sequence
 
 import numpy as np
 
@@ -9,29 +9,38 @@ import numpy as np
 class EmbeddingProvider:
     """Embedding vector provider (replaceable with OpenAI, local models, etc.)."""
 
-    def __init__(self, dim: int = 384) -> None:
+    __slots__ = ("dim", "_cache", "_max_cache_size")
+
+    def __init__(self, dim: int = 384, max_cache_size: int = 4096) -> None:
         self.dim = dim
         # Production: use real models; here using simulation
-        self._cache: Dict[str, List[float]] = {}
+        self._cache: dict[str, np.ndarray] = {}
+        self._max_cache_size = max_cache_size
 
-    def embed(self, text: str) -> List[float]:
+    def embed(self, text: str) -> np.ndarray:
         """Generate text vector embedding."""
-        if text in self._cache:
-            return self._cache[text]
+        vec = self._cache.get(text)
+        if vec is not None:
+            return vec
 
         # Simulated embedding: hash-based deterministic vector
         # Production replacement: openai.Embedding.create() or sentence-transformers
-        hash_val = hashlib.md5(text.encode()).hexdigest()
-        np.random.seed(int(hash_val[:8], 16))
-        vec = np.random.randn(self.dim).astype(np.float32)
-        vec = vec / np.linalg.norm(vec)  # Normalize
+        seed = zlib.crc32(text.encode()) & 0xFFFFFFFF
+        rng = np.random.default_rng(seed)
+        vec = rng.standard_normal(self.dim, dtype=np.float32)
+        norm = np.linalg.norm(vec)
+        if norm != 0:
+            vec /= norm
 
-        self._cache[text] = vec.tolist()
-        return self._cache[text]
+        self._cache[text] = vec
+        if len(self._cache) > self._max_cache_size:
+            self._cache.pop(next(iter(self._cache)))
+        return vec
 
-    def similarity(self, vec1: List[float], vec2: List[float]) -> float:
+    def similarity(self, vec1: Sequence[float] | np.ndarray, vec2: Sequence[float] | np.ndarray) -> float:
         """Compute cosine similarity."""
-        v1, v2 = np.array(vec1), np.array(vec2)
+        v1 = np.asarray(vec1, dtype=np.float32)
+        v2 = np.asarray(vec2, dtype=np.float32)
         norm = np.linalg.norm(v1) * np.linalg.norm(v2)
         if norm == 0:
             return 0.0
