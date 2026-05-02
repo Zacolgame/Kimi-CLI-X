@@ -335,7 +335,6 @@ def percentage_str(num: float) -> str:
 
 
 _default_thinking: bool = True
-_default_plan_mode: bool = False
 _default_yolo: bool = True
 _default_agent_file_dir: Path = Path(__file__).parent
 _default_agent_file: Path = _default_agent_file_dir / 'agent_worker.yaml'
@@ -354,11 +353,6 @@ COMMON_SKILL_DIRS: list[str] = [
 def set_default_thinking(value: bool) -> None:
     global _default_thinking
     _default_thinking = value
-
-
-def set_default_plan_mode(value: bool) -> None:
-    global _default_plan_mode
-    _default_plan_mode = value
 
 
 def set_default_yolo(value: bool) -> None:

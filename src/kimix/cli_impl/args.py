@@ -28,8 +28,6 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
                         help='Disable colorful print')
     parser.add_argument('-no_think', '--no_think', action='store_true',
                         help='Disable thinking mode')
-    parser.add_argument('-plan', '--plan', action='store_true',
-                        help='Enable plan mode')
     parser.add_argument('-no_yolo', '--no_yolo', action='store_true',
                         help='Disable YOLO mode')
     parser.add_argument('-s', '--skill-dir', type=str, nargs='*', default=None,
@@ -58,12 +56,6 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
         print_debug('Thinking OFF.')
     else:
         base.set_default_thinking(True)
-
-    if args.plan:
-        base.set_default_plan_mode(True)
-        print_debug('Plan mode ON.')
-    else:
-        base.set_default_plan_mode(False)
 
     if args.no_yolo:
         base.set_default_yolo(False)

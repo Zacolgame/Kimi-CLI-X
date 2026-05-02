@@ -28,7 +28,6 @@ from .session import (
 )
 from .prompt import prompt_async, prompt, prompt_path, execute_plan, check_plan_cache
 from .fix_error import fix_error, async_prompt, async_fix_error
-from .utils import set_plan_mode
 
 __all__ = [
     "TextSearchIndex",
@@ -65,6 +64,5 @@ __all__ = [
     "fix_error",
     "async_prompt",
     "async_fix_error",
-    "set_plan_mode",
     "compact_default_context"
 ]

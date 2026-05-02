@@ -51,7 +51,6 @@ async def _create_session_async(
     yolo: Optional[bool] = None,
     agent_file: Optional[Path] = None,
     resume: bool = False,
-    plan_mode: Optional[bool] = None,
     provider_dict: dict[str, Any] | None = None,
     chat_provider: ChatProvider | None = None,
     is_sub_agent: bool = False,
@@ -75,7 +74,7 @@ async def _create_session_async(
     skills_dirs = _ensure_skill_dirs(skills_dir) if skills_dir is not None else base.get_skill_dirs()
     system_prompts: Callable[[BuiltinSystemPromptArgs], str] | None = None
     if system_prompts is None:
-        system_prompts = get_system_prompt(is_sub_agent, plan_mode, yolo, work_dir, skills_dirs, system_prompt)
+        system_prompts = get_system_prompt(is_sub_agent, yolo, work_dir, skills_dirs, system_prompt)
     if provider_dict:
         custom_system_prompt = provider_dict.get('system_prompt')
         if custom_system_prompt:
@@ -90,7 +89,6 @@ async def _create_session_async(
             work_dir=work_dir if work_dir is not None else KaosPath('.'),
             skills_dirs=skills_dirs,
             yolo=yolo if yolo is not None else base._default_yolo,
-            plan_mode=plan_mode if plan_mode is not None else base._default_plan_mode,
             thinking=thinking if thinking is not None else base._default_thinking,
             config=cfg,
             agent_file=agent_file,
@@ -108,7 +106,6 @@ async def _create_session_async(
             work_dir=work_dir if work_dir is not None else KaosPath('.'),
             skills_dirs=skills_dirs,
             yolo=yolo if yolo is not None else base._default_yolo,
-            plan_mode=plan_mode if plan_mode is not None else base._default_plan_mode,
             thinking=thinking if thinking is not None else base._default_thinking,
             config=cfg,
             agent_file=agent_file,
@@ -129,7 +126,6 @@ def create_session(
     yolo: Optional[bool] = None,
     agent_file: Optional[Path] = None,
     resume: bool = False,
-    plan_mode: Optional[bool] = None,
     provider_dict: dict[str, Any] | None = None,
     chat_provider: ChatProvider | None = None,
     is_sub_agent: bool = False,
@@ -144,7 +140,6 @@ def create_session(
         yolo=yolo,
         agent_file=agent_file,
         resume=resume,
-        plan_mode=plan_mode,
         provider_dict=provider_dict,
         chat_provider=chat_provider,
         is_sub_agent=is_sub_agent,

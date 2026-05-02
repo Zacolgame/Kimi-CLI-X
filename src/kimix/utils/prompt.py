@@ -197,10 +197,7 @@ def _make_new_plan_file() -> Path:
 
 
 def execute_plan(prompt_str: str, ask_if_use_cache: Callable[[str], bool] | None = None, ask_if_execute_plan: Callable[[list[str], int], bool] | None = None, plan_loader: PlanLoader | None = None) -> None:
-    from kimix.base import _default_plan_mode
     import os
-    assert (
-        not _default_plan_mode), 'Can not use this in auto-plan mode. (use /plan:off)'
     from my_tools.note import read_file
     use_cache = False
     if plan_loader is not None:
@@ -221,7 +218,7 @@ def execute_plan(prompt_str: str, ask_if_use_cache: Callable[[str], bool] | None
         task_finished = False
         plan_session: Session | None = None
         try:
-            plan_session = create_session(agent_file='agent_boss.yaml', plan_mode=False, system_prompt=SystemPromptType.TodoMaker)
+            plan_session = create_session(agent_file='agent_boss.yaml', system_prompt=SystemPromptType.TodoMaker)
             custom_data = plan_session.get_custom_data()
             if custom_data is not None:
                 custom_data['note_writing_path'] = plan_file

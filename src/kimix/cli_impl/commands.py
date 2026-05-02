@@ -126,7 +126,7 @@ def _cmd_fix(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     return None, False
 
 
-def _cmd_todo(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
+def _cmd_plan(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     if len(task_split) >= 2:
         file_name_str = ':'.join(task_split[1:])
         file_path = Path(file_name_str)
@@ -178,25 +178,6 @@ def _cmd_todo(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     if prompt_str.strip():
         execute_plan(prompt_str, ask_if_use_cache=None,
                      ask_if_execute_plan=ask_if_execute)
-    return None, False
-
-
-def _cmd_plan(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
-    if len(task_split) < 2 or (not task_split[1]):
-        print_error('Command must be /plan:on or /plan:off')
-        return None, False
-    value = task_split[1].strip().lower()
-    if value == 'on':
-        base._default_plan_mode = True
-        print_success('Plan mode enabled.')
-    elif value == 'off':
-        base._default_plan_mode = False
-        print_success('Plan mode disabled.')
-    else:
-        print_error('Command must be /plan:on or /plan:off')
-        return None, False
-    if get_default_session():
-        clear_default_context(True, True)
     return None, False
 
 
@@ -288,10 +269,9 @@ _command_map = {
     'cmd': _cmd_cmd,
     'cd': _cmd_cd,
     'fix': _cmd_fix,
-    'plan': _cmd_plan,
     'txt': _cmd_txt,
     'file': _cmd_file,
-    'todo': _cmd_todo,
+    'plan': _cmd_plan,
     'compact': _cmd_compact,
     'export': _cmd_export,
     'swarm': _cmd_swarm

@@ -26,7 +26,6 @@ class SystemPromptType(Enum):
 
 def get_system_prompt(
         is_sub_agent: bool = False,
-        plan_mode: bool | None = None,
         yolo: bool | None = None,
         work_dir: Optional[KaosPath] = None,
         skills_dirs: Optional[list[KaosPath]] = None,
@@ -34,7 +33,6 @@ def get_system_prompt(
 ) -> Callable[[BuiltinSystemPromptArgs], str]:
     agent_md = (Path(str(work_dir)) if work_dir is not None else Path(
         os.curdir)) / 'AGENTS.md'
-    plan_mode = plan_mode if plan_mode is not None else base._default_plan_mode
     yolo = yolo if yolo is not None else base._default_yolo
 
     def system_prompt_func(args: BuiltinSystemPromptArgs) -> str:
@@ -62,8 +60,6 @@ def get_system_prompt(
                     items.append('Run Python: `python -c <code>`.')
                 if not args.KIMI_OS == 'Windows':
                     items.append(f'Bash Shell: {args.KIMI_SHELL}. use `Run`')
-                if plan_mode:
-                    items.append('Plan mode: draft, ExitPlanMode, execute.')
                 start_index = 3
                 if yolo:
                     items.append(
