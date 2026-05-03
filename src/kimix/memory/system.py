@@ -10,7 +10,7 @@ from kimix.memory.long_term_memory import LongTermMemory
 class AgentMemorySystem:
     """Complete Agent memory system."""
 
-    def __init__(self, dim: int = 384, ltm_path: str = "agent_memory.json") -> None:
+    def __init__(self, dim: int = 384, ltm_path: str = ".kimix_cache/ltm.json") -> None:
         self.embedding_provider = EmbeddingProvider(dim)
 
         # Three-tier memory architecture

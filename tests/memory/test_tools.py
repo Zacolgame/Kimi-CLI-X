@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from kimi_agent_sdk import ToolError, ToolOk
+from kimix.memory.system import AgentMemorySystem
 from kimix.memory.tools import (
     GetContext,
     Recall,
@@ -28,12 +29,12 @@ def reset_memory_system():
     
     tools_mod._memory_system = None
     # Remove default memory file if it exists
-    if os.path.exists("agent_memory.json"):
-        os.unlink("agent_memory.json")
+    if os.path.exists(".kimix_cache/ltm.json"):
+        os.unlink(".kimix_cache/ltm.json")
     yield
     tools_mod._memory_system = None
-    if os.path.exists("agent_memory.json"):
-        os.unlink("agent_memory.json")
+    if os.path.exists(".kimix_cache/ltm.json"):
+        os.unlink(".kimix_cache/ltm.json")
 
 
 @pytest.fixture
@@ -51,23 +52,23 @@ class TestRememberTool:
     
     @pytest.mark.asyncio
     async def test_remember_long_term(self):
-        """Test storing in long-term memory via perceive."""
+        """Test storing in long-term memory via remember."""
         tool = Remember()
         result = await tool(Remember.params(content="test fact for long term", importance=8.0, long_term=True))
         assert isinstance(result, ToolOk)
         assert not result.is_error
-        assert "Perceived" in result.output
+        assert "Remembered" in result.output
         assert "test fact" in result.output
         assert "importance: 8.0" in result.output
 
     @pytest.mark.asyncio
     async def test_remember_short_term(self):
-        """Test storing in short-term memory via remember."""
+        """Test storing in short-term memory via perceive."""
         tool = Remember()
         result = await tool(Remember.params(content="test observation for short term", importance=5.0, long_term=False))
         assert isinstance(result, ToolOk)
         assert not result.is_error
-        assert "Remembered" in result.output
+        assert "Perceived" in result.output
         assert "test observation" in result.output
 
     @pytest.mark.asyncio
@@ -116,7 +117,7 @@ class TestRememberTool:
         tool = Remember()
         result = await tool(Remember.params(content="", importance=5.0, long_term=False))
         assert isinstance(result, ToolOk)
-        assert "Remembered" in result.output
+        assert "Perceived" in result.output
 
     @pytest.mark.asyncio
     async def test_remember_default_params(self):
@@ -125,6 +126,42 @@ class TestRememberTool:
         result = await tool(Remember.params(content="default params test"))
         assert isinstance(result, ToolOk)
         # Default: importance=5.0, long_term=True, memory_type=SEMANTIC
+
+    @pytest.mark.asyncio
+    async def test_remember_long_term_persists_to_disk(self):
+        """Test that long-term memory is saved to disk immediately."""
+        import kimix.memory.tools as tools_mod
+        import json
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+
+        try:
+            # Reset and use custom path
+            tools_mod._memory_system = None
+            memory = AgentMemorySystem(ltm_path=path)
+            tools_mod._memory_system = memory
+
+            tool = Remember()
+            result = await tool(Remember.params(
+                content="disk persistent fact",
+                importance=9.0,
+                long_term=True
+            ))
+            assert isinstance(result, ToolOk)
+            assert "Remembered" in result.output
+
+            # Verify file exists and contains the memory
+            assert os.path.exists(path)
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            assert len(data) == 1
+            assert data[0]["content"] == "disk persistent fact"
+            assert data[0]["importance"] == 9.0
+        finally:
+            tools_mod._memory_system = None
+            if os.path.exists(path):
+                os.unlink(path)
 
 
 class TestRecallTool:

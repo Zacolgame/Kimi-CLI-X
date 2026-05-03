@@ -3,6 +3,7 @@
 import hashlib
 import heapq
 import json
+import os
 from typing import Dict, List, Optional, Set
 
 from kimix.memory.types import MemoryEntry, MemoryType
@@ -16,6 +17,12 @@ class LongTermMemory:
 
     def __init__(self, storage_path: Optional[str] = None, dim: int = 384) -> None:
         self.storage_path = storage_path or "ltm.json"
+        if not isinstance(self.storage_path, str) or not self.storage_path:
+            raise ValueError("storage_path must be a non-empty string")
+        # Ensure parent directory exists
+        parent = os.path.dirname(self.storage_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         self.dim = dim
         self.entries: Dict[str, MemoryEntry] = {}  # id -> entry
         self.index: Dict[str, Set[str]] = {}       # tag -> entry_ids

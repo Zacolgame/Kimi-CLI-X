@@ -45,13 +45,6 @@ class Remember(CallableTool2):
         try:
             memory = await _get_memory_system()
             if params.long_term:
-                entry = memory.perceive(
-                    observation=params.content,
-                    importance=params.importance,
-                    tags=params.tags
-                )
-                return ToolOk(output=f"Perceived: {entry.content[:100]}... (importance: {entry.importance})")
-            else:
                 entry = memory.remember(
                     fact=params.content,
                     importance=params.importance,
@@ -59,6 +52,13 @@ class Remember(CallableTool2):
                     memory_type=params.memory_type,
                 )
                 return ToolOk(output=f"Remembered: {entry.content[:100]}... (importance: {entry.importance})")
+            else:
+                entry = memory.perceive(
+                    observation=params.content,
+                    importance=params.importance,
+                    tags=params.tags
+                )
+                return ToolOk(output=f"Perceived: {entry.content[:100]}... (importance: {entry.importance})")
         except Exception as e:
             return ToolError(message=str(e), output="", brief="Failed to store memory")
 
