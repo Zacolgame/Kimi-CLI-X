@@ -26,6 +26,13 @@ class ScarEntry:
     timestamp: float = field(default_factory=time.time)
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    _trigger_lower: tuple[str, ...] = field(init=False, repr=False, compare=False, default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "_trigger_lower", tuple(t.lower() for t in self.trigger_conditions)
+        )
+
     def to_memory_entry(self) -> MemoryEntry:
         return MemoryEntry(
             content=f"SCAR: {self.failure_pattern} | LESSON: {self.lesson}",
@@ -50,6 +57,14 @@ class RuleEntry:
     priority: float = 5.0         # 0–10, higher wins
     tags: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    _cond_lower: str = field(init=False, repr=False, compare=False, default="")
+    _cond_words: frozenset[str] = field(init=False, repr=False, compare=False, default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        cond_lower = self.condition.lower()
+        object.__setattr__(self, "_cond_lower", cond_lower)
+        object.__setattr__(self, "_cond_words", frozenset(_WORD_RE.findall(cond_lower)))
 
     def to_memory_entry(self) -> MemoryEntry:
         return MemoryEntry(
@@ -97,16 +112,16 @@ class ProceduralMemory:
 
     def match_scars(self, query: str, top_k: int = 3) -> list[ScarEntry]:
         """Return scars whose trigger conditions match *query*."""
-        scored: list[tuple[float, ScarEntry]] = []
         query_lower = query.lower()
-        for scar in self.scars:
+        scored: list[tuple[float, int, ScarEntry]] = []
+        for idx, scar in enumerate(self.scars):
             score = 0.0
-            for cond in scar.trigger_conditions:
-                if cond.lower() in query_lower:
+            for cond in scar._trigger_lower:
+                if cond in query_lower:
                     score += 1.0
             if score:
-                scored.append((score * scar.severity, scar))
-        return [s[1] for s in heapq.nlargest(top_k, scored)]
+                scored.append((score * scar.severity, idx, scar))
+        return [s[2] for s in heapq.nlargest(top_k, scored)]
 
     # --- Rules ---
 
@@ -138,23 +153,22 @@ class ProceduralMemory:
     def match_rules(self, context: str, top_k: int = 3) -> list[RuleEntry]:
         """Return rules whose condition text appears in *context*."""
         self._ensure_rules_sorted()
-        scored: list[tuple[float, RuleEntry]] = []
         ctx_lower = context.lower()
         ctx_words = set(_WORD_RE.findall(ctx_lower))
-        for rule in self.rules:
+        scored: list[tuple[float, int, RuleEntry]] = []
+        for idx, rule in enumerate(self.rules):
             score = 0.0
-            cond_lower = rule.condition.lower()
             # Exact phrase match
-            if cond_lower in ctx_lower:
+            if rule._cond_lower in ctx_lower:
                 score += 2.0
             # Word overlap
-            cond_words = set(_WORD_RE.findall(cond_lower))
+            cond_words = rule._cond_words
             if cond_words:
                 overlap = len(cond_words & ctx_words) / len(cond_words)
                 score += overlap
             if score:
-                scored.append((score * rule.priority, rule))
-        return [r[1] for r in heapq.nlargest(top_k, scored)]
+                scored.append((score * rule.priority, idx, rule))
+        return [r[2] for r in heapq.nlargest(top_k, scored)]
 
     # --- Unified ---
 

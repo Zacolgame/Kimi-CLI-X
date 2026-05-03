@@ -10,6 +10,10 @@ from typing import Any
 
 import numpy as np
 
+# Pre-computed decay coefficient to avoid a division per call.
+# Effective importance decays as exp(-0.1 * days_old) where days_old = age / 86400.
+_DECAY_COEFF = -0.1 / 86400.0
+
 
 class MemoryType(Enum):
     """Memory type enumeration — six-layer pyramid."""
@@ -59,8 +63,7 @@ class MemoryEntry:
         """Calculate effective importance (time decay + access frequency)."""
         if now is None:
             now = time.time()
-        days_old = (now - self.timestamp) / 86400
-        recency_factor = math.exp(-0.1 * days_old)
+        recency_factor = math.exp(_DECAY_COEFF * (now - self.timestamp))
         access_boost = min(self.access_count * 0.1, 2.0)
         return self.importance * recency_factor * (1 + access_boost)
 
@@ -69,9 +72,9 @@ class MemoryEntry:
         self.access_count += 1
         self.last_accessed = time.time() if now is None else now
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, now: float | None = None) -> dict[str, Any]:
         embedding = self.embedding
-        if embedding is not None and hasattr(embedding, "tolist"):
+        if isinstance(embedding, np.ndarray):
             embedding = embedding.tolist()
         return {
             "content": self.content,
@@ -86,19 +89,20 @@ class MemoryEntry:
             "metadata": self.metadata,
             "expires_at": self.expires_at,
             "agent_id": self.agent_id,
-            "effective_importance": self.get_effective_importance(),
+            "effective_importance": self.get_effective_importance(now),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MemoryEntry:
         """Reconstruct a MemoryEntry from a plain dict."""
+        now = time.time()
         return cls(
             content=data["content"],
             memory_type=MemoryType(data["memory_type"]),
-            timestamp=data.get("timestamp", time.time()),
+            timestamp=data.get("timestamp", now),
             importance=data.get("importance", 1.0),
             access_count=data.get("access_count", 0),
-            last_accessed=data.get("last_accessed", time.time()),
+            last_accessed=data.get("last_accessed", now),
             embedding=data.get("embedding"),
             tags=data.get("tags", []),
             source=data.get("source", ""),

@@ -1,5 +1,7 @@
 """Agent Memory System - Tiered memory architecture for Kimi Agent."""
 
+import importlib
+import sys
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -15,7 +17,7 @@ if TYPE_CHECKING:
     from kimix.memory.cold_storage import ColdStorage
     from kimix.memory.sqlite_backend import SQLiteBackend
 
-__all__ = [
+__all__ = (
     "MemoryEntry",
     "MemoryType",
     "EmbeddingProvider",
@@ -37,7 +39,7 @@ __all__ = [
     "TriggerType",
     "ColdStorage",
     "SQLiteBackend",
-]
+)
 
 _IMPORT_MAP = {
     "MemoryEntry": "kimix.memory.types",
@@ -63,15 +65,25 @@ _IMPORT_MAP = {
     "SQLiteBackend": "kimix.memory.sqlite_backend",
 }
 
+# Cache for resolved module objects to avoid repeated import_module calls.
+_module_cache: dict[str, object] = {}
+
 
 def __getattr__(name: str) -> object:
-    if name in _IMPORT_MAP:
-        import importlib
+    mod_name = _IMPORT_MAP.get(name)
+    if mod_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-        module = importlib.import_module(_IMPORT_MAP[name])
-        return getattr(module, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = _module_cache.get(mod_name)
+    if module is None:
+        module = importlib.import_module(mod_name)
+        _module_cache[mod_name] = module
+
+    obj = getattr(module, name)
+    # Cache on the package module so subsequent lookups bypass __getattr__.
+    setattr(sys.modules[__name__], name, obj)
+    return obj
 
 
 def __dir__() -> list[str]:
-    return __all__
+    return list(__all__)

@@ -47,4 +47,7 @@ class TestWorkingMemory:
         wm = WorkingMemory(max_items=5)
         entry = MemoryEntry(content="test", memory_type=MemoryType.EPISODIC)
         wm.add(entry)
-        assert entry.memory_type == MemoryType.WORKING
+        # Stored copy should have WORKING type
+        assert wm.items[0].memory_type == MemoryType.WORKING
+        # Original entry must not be mutated
+        assert entry.memory_type == MemoryType.EPISODIC

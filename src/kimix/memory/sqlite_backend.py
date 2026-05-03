@@ -162,33 +162,54 @@ class SQLiteBackend:
 
     def store_many(self, items: list[tuple[str, MemoryEntry]], dim: int = 384) -> None:
         """Batch insert/replace entries in a single transaction."""
+        if not items:
+            return
+
+        mem_params = [
+            (
+                entry_id,
+                entry.content,
+                entry.memory_type.value,
+                entry.timestamp,
+                entry.importance,
+                entry.access_count,
+                entry.last_accessed,
+                self._embedding_to_blob(entry.embedding),
+                json.dumps(entry.tags, ensure_ascii=False),
+                entry.source,
+                json.dumps(entry.metadata, ensure_ascii=False),
+                entry.expires_at,
+                entry.agent_id,
+            )
+            for entry_id, entry in items
+        ]
+        tag_delete_params = [(entry_id,) for entry_id, _ in items]
+        tag_insert_params = [
+            (entry_id, tag)
+            for entry_id, entry in items
+            for tag in entry.tags
+        ]
+
         with self._conn:
-            for entry_id, entry in items:
-                self._conn.execute(
-                    """
-                    INSERT OR REPLACE INTO memories
-                    (id, content, memory_type, timestamp, importance, access_count,
-                     last_accessed, embedding, tags, source, metadata, expires_at, agent_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        entry_id,
-                        entry.content,
-                        entry.memory_type.value,
-                        entry.timestamp,
-                        entry.importance,
-                        entry.access_count,
-                        entry.last_accessed,
-                        self._embedding_to_blob(entry.embedding),
-                        json.dumps(entry.tags, ensure_ascii=False),
-                        entry.source,
-                        json.dumps(entry.metadata, ensure_ascii=False),
-                        entry.expires_at,
-                        entry.agent_id,
-                    ),
+            self._conn.executemany(
+                """
+                INSERT OR REPLACE INTO memories
+                (id, content, memory_type, timestamp, importance, access_count,
+                 last_accessed, embedding, tags, source, metadata, expires_at, agent_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                mem_params,
+            )
+            if tag_delete_params:
+                self._conn.executemany(
+                    "DELETE FROM memory_tags WHERE entry_id = ?",
+                    tag_delete_params,
                 )
-                self._delete_tags(entry_id)
-                self._insert_tags(entry_id, entry.tags)
+            if tag_insert_params:
+                self._conn.executemany(
+                    "INSERT OR IGNORE INTO memory_tags (entry_id, tag) VALUES (?, ?)",
+                    tag_insert_params,
+                )
 
     def get(self, entry_id: str, dim: int = 384) -> MemoryEntry | None:
         row = self._conn.execute(
@@ -332,9 +353,9 @@ class SQLiteBackend:
             sql += " AND (m.expires_at IS NULL OR m.expires_at > ?)"
             params.append(time.time())
 
-        sql += f"""
+        sql += """
             GROUP BY m.id
-            HAVING COUNT(DISTINCT t.tag) = ?
+            HAVING COUNT(*) = ?
         """
         params.append(len(tags))
 

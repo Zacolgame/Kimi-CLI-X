@@ -93,7 +93,7 @@ No multiple steps at once.
         if agent_md.is_file():
             agent_md_content = agent_md.read_text(encoding='utf-8', errors='replace')
             agent_md_doc = f'AGENTS.md:\n```\n{agent_md_content}\n```\n'
-        items.append('Use `SkillRag` tool to search and retrieve skills.')
+        items.append('Use `SkillSearch` tool to search and retrieve skills.')
         if args.KIMI_SKILLS:
             skill_doc = f'Skills:\n{args.KIMI_SKILLS}\n'
         numbered_block = ''

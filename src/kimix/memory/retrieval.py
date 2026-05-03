@@ -45,7 +45,7 @@ class NgramTokenizer:
         if not text:
             return self.n
         cjk_count = 0
-        threshold = len(text) * 0.3
+        threshold = len(text) * 3 // 10
         is_cjk = self._is_cjk
         for c in text:
             if is_cjk(c):
@@ -248,7 +248,7 @@ class InvertedIndex:
 class BM25Scorer:
     """BM25 relevance scorer over an :class:`InvertedIndex`."""
 
-    __slots__ = ("index", "k1", "b")
+    __slots__ = ("index", "k1", "b", "_denom_base")
 
     def __init__(
         self,
@@ -259,6 +259,16 @@ class BM25Scorer:
         self.index = index
         self.k1 = k1
         self.b = b
+        self._denom_base: NDArray[np.float64] | None = None
+        self._build_denom_base()
+
+    def _build_denom_base(self) -> None:
+        avgdl = self.index.avgdl
+        if avgdl == 0:
+            return
+        k1 = self.k1
+        b = self.b
+        self._denom_base = k1 * ((1.0 - b) + (b / avgdl) * self.index.doc_lengths_arr)
 
     @staticmethod
     def _idf(df: int, N: int) -> float:
@@ -274,20 +284,17 @@ class BM25Scorer:
 
         ``candidate_docs`` restricts scoring to a subset of docs; ``None``
         scores every document that has at least one query token.
+
+        Duplicate tokens in *query_tokens* are scored multiple times; callers
+        should deduplicate if needed.
         """
         N = self.index.N
-        avgdl = self.index.avgdl
-        if N == 0 or avgdl == 0:
+        if N == 0 or self._denom_base is None:
             return {}
 
-        doc_lengths = self.index.doc_lengths_arr
-        k1 = self.k1
-        b = self.b
-        k1_plus_1 = k1 + 1.0
-        one_minus_b = 1.0 - b
-        b_over_avgdl = b / avgdl
-
+        k1_plus_1 = self.k1 + 1.0
         scores_arr = np.zeros(N, dtype=np.float64)
+        denom_base = self._denom_base
 
         if candidate_docs is not None:
             cand_sorted = np.array(sorted(candidate_docs), dtype=np.int32)
@@ -311,25 +318,21 @@ class BM25Scorer:
                 if df == 0:
                     continue
                 idf = self._idf(df, N)
-                dls = doc_lengths[docs]
-                denom = tfs.astype(np.float64) + k1 * (one_minus_b + b_over_avgdl * dls)
-                token_scores = idf * tfs.astype(np.float64) * k1_plus_1 / denom
+                tfs_f = tfs.astype(np.float64)
+                denom = tfs_f + denom_base[docs]
+                token_scores = idf * tfs_f * k1_plus_1 / denom
                 scores_arr[docs] += token_scores
         else:
-            seen_tokens: set[str] = set()
             for token in query_tokens:
-                if token in seen_tokens:
-                    continue
-                seen_tokens.add(token)
                 postings = self.index.get_postings(token)
                 if postings is None:
                     continue
                 docs, tfs = postings
                 df = len(docs)
                 idf = self._idf(df, N)
-                dls = doc_lengths[docs]
-                denom = tfs.astype(np.float64) + k1 * (one_minus_b + b_over_avgdl * dls)
-                token_scores = idf * tfs.astype(np.float64) * k1_plus_1 / denom
+                tfs_f = tfs.astype(np.float64)
+                denom = tfs_f + denom_base[docs]
+                token_scores = idf * tfs_f * k1_plus_1 / denom
                 scores_arr[docs] += token_scores
 
         nonzero = np.flatnonzero(scores_arr)
@@ -339,7 +342,7 @@ class BM25Scorer:
 class LevenshteinAutomaton:
     """Damerau-Levenshtein automaton for fuzzy term expansion."""
 
-    __slots__ = ("pattern", "max_edits", "prefix_length")
+    __slots__ = ("pattern", "max_edits", "prefix_length", "_pattern_counts", "_pattern_counts_items")
 
     def __init__(
         self,
@@ -350,6 +353,12 @@ class LevenshteinAutomaton:
         self.pattern = pattern
         self.max_edits = max_edits
         self.prefix_length = prefix_length
+        # Pre-compute character frequencies for cheap lower-bound rejection
+        pc: dict[str, int] = {}
+        for c in pattern:
+            pc[c] = pc.get(c, 0) + 1
+        self._pattern_counts = pc
+        self._pattern_counts_items = list(pc.items())
 
     @staticmethod
     def auto_fuzziness(term: str) -> int:
@@ -362,12 +371,12 @@ class LevenshteinAutomaton:
         return 2
 
     @staticmethod
-    @functools.lru_cache(maxsize=8192)
+    @functools.lru_cache(maxsize=65536)
     def _damerau_levenshtein(s: str, t: str) -> int:
         """Compute Damerau-Levenshtein distance between *s* and *t*."""
+        if len(s) < len(t):
+            s, t = t, s
         m, n = len(s), len(t)
-        if m < n:
-            return LevenshteinAutomaton._damerau_levenshtein(t, s)
         if n == 0:
             return m
 
@@ -388,8 +397,9 @@ class LevenshteinAutomaton:
         curr = [0] * (n + 1)
         for i in range(1, m + 1):
             curr[0] = i
+            si_1 = s[i - 1]
             for j in range(1, n + 1):
-                cost = 0 if s[i - 1] == t[j - 1] else 1
+                cost = 0 if si_1 == t[j - 1] else 1
                 curr[j] = min(
                     curr[j - 1] + 1,      # insertion
                     prev[j] + 1,          # deletion
@@ -398,12 +408,25 @@ class LevenshteinAutomaton:
                 if (
                     i > 1
                     and j > 1
-                    and s[i - 1] == t[j - 2]
+                    and si_1 == t[j - 2]
                     and s[i - 2] == t[j - 1]
                 ):
                     curr[j] = min(curr[j], prev_prev[j - 2] + 1)  # transposition
             prev_prev, prev, curr = prev, curr, prev_prev
         return prev[n]
+
+    def _freq_lower_bound(self, term: str) -> int:
+        """Lower bound on edit distance based on character frequencies."""
+        total = 0
+        matched = 0
+        term_len = len(term)
+        for c, pc in self._pattern_counts_items:
+            tc = term.count(c)
+            matched += tc
+            if pc != tc:
+                total += abs(pc - tc)
+        total += term_len - matched
+        return (total + 1) // 2
 
     def match(self, dictionary: Iterable[str], max_expansions: int = 50) -> list[str]:
         """Walk *dictionary* and collect up to *max_expansions* matches."""
@@ -413,6 +436,8 @@ class LevenshteinAutomaton:
         prefix_length = self.prefix_length
         prefix = self.pattern[:prefix_length] if prefix_length > 0 else ""
         dl = self._damerau_levenshtein
+        # Pre-compute pattern char frequencies for cheap lower-bound rejection
+        has_freq_filter = len(self.pattern) <= 64
 
         # Fast-path: if dictionary has prefix buckets, exploit them
         if hasattr(dictionary, "_terms_by_length_prefix"):
@@ -423,13 +448,28 @@ class LevenshteinAutomaton:
                 bucket = terms_by_prefix.get((length, prefix), ()) if prefix_length > 0 else ()
                 if not bucket and prefix_length > 0:
                     continue
-                for term in bucket or dictionary._terms_by_length.get(length, ()):
-                    if len(results) >= max_expansions:
-                        return results
-                    if prefix_length > 0 and term[:prefix_length] != prefix:
-                        continue
-                    if dl(self.pattern, term) <= max_edits:
-                        results.append(term)
+                candidates = bucket or dictionary._terms_by_length.get(length, ())  # type: ignore[attr-defined]
+                if prefix_length == 1:
+                    p0 = prefix[0]
+                    for term in candidates:
+                        if len(results) >= max_expansions:
+                            return results
+                        if term[0] != p0:
+                            continue
+                        if has_freq_filter and self._freq_lower_bound(term) > max_edits:
+                            continue
+                        if dl(self.pattern, term) <= max_edits:
+                            results.append(term)
+                else:
+                    for term in candidates:
+                        if len(results) >= max_expansions:
+                            return results
+                        if prefix_length > 0 and term[:prefix_length] != prefix:
+                            continue
+                        if has_freq_filter and self._freq_lower_bound(term) > max_edits:
+                            continue
+                        if dl(self.pattern, term) <= max_edits:
+                            results.append(term)
                 if len(results) >= max_expansions:
                     return results
             return results
@@ -443,7 +483,12 @@ class LevenshteinAutomaton:
                 for term in terms_by_length.get(length, ()):
                     if len(results) >= max_expansions:
                         return results
-                    if prefix_length > 0 and term[:prefix_length] != prefix:
+                    if prefix_length == 1:
+                        if term[0] != prefix[0]:
+                            continue
+                    elif prefix_length > 0 and term[:prefix_length] != prefix:
+                        continue
+                    if has_freq_filter and self._freq_lower_bound(term) > max_edits:
                         continue
                     if dl(self.pattern, term) <= max_edits:
                         results.append(term)
@@ -457,9 +502,14 @@ class LevenshteinAutomaton:
             term_len = len(term)
             if abs(term_len - pattern_len) > max_edits:
                 continue
-            if prefix_length > 0:
+            if prefix_length == 1:
+                if term_len >= 1 and term[0] != prefix[0]:
+                    continue
+            elif prefix_length > 0:
                 if term_len >= prefix_length and term[:prefix_length] != prefix:
                     continue
+            if has_freq_filter and self._freq_lower_bound(term) > max_edits:
+                continue
             if dl(self.pattern, term) <= max_edits:
                 results.append(term)
         return results
@@ -554,6 +604,7 @@ class Searcher:
         if not expanded_tokens:
             return []
 
+        expanded_tokens = list(dict.fromkeys(expanded_tokens))
         scores = self.scorer.score(expanded_tokens)
         if not scores:
             return []

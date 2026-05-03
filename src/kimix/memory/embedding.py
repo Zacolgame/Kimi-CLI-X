@@ -1,6 +1,8 @@
 """Embedding vector provider."""
 
+import threading
 import zlib
+from collections import OrderedDict
 from typing import Sequence
 
 import numpy as np
@@ -9,56 +11,75 @@ import numpy as np
 class EmbeddingProvider:
     """Embedding vector provider (replaceable with OpenAI, local models, etc.)."""
 
-    __slots__ = ("dim", "_cache", "_max_cache_size")
+    __slots__ = ("dim", "_cache", "_max_cache_size", "_lock")
 
     def __init__(self, dim: int = 384, max_cache_size: int = 4096) -> None:
         self.dim = dim
         # Production: use real models; here using simulation
-        self._cache: dict[str, np.ndarray] = {}
+        self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
         self._max_cache_size = max_cache_size
+        self._lock = threading.Lock()
 
-    def embed(self, text: str) -> np.ndarray:
-        """Generate text vector embedding."""
-        vec = self._cache.get(text)
-        if vec is not None:
-            return vec
-
-        # Simulated embedding: hash-based deterministic vector
-        # Production replacement: openai.Embedding.create() or sentence-transformers
+    def _compute(self, text: str) -> np.ndarray:
+        """Simulated embedding: hash-based deterministic vector."""
         seed = zlib.crc32(text.encode()) & 0xFFFFFFFF
         rng = np.random.default_rng(seed)
         vec = rng.standard_normal(self.dim, dtype=np.float32)
         norm = np.linalg.norm(vec)
         if norm:
             vec /= norm
+        return vec
 
-        self._cache[text] = vec
-        if len(self._cache) > self._max_cache_size:
-            oldest = next(iter(self._cache))
-            del self._cache[oldest]
+    def embed(self, text: str) -> np.ndarray:
+        """Generate text vector embedding."""
+        with self._lock:
+            vec = self._cache.get(text)
+            if vec is not None:
+                self._cache.move_to_end(text)
+                return vec
+
+        vec = self._compute(text)
+
+        with self._lock:
+            self._cache[text] = vec
+            if len(self._cache) > self._max_cache_size:
+                self._cache.popitem(last=False)
         return vec
 
     def embed_batch(self, texts: list[str]) -> list[np.ndarray]:
         """Batch embedding with cache awareness.
 
         Enables a single API call for real providers; the simulated provider
-        falls back to individual embed() calls while still leveraging cache.
+        computes missing vectors directly while still leveraging cache.
         """
-        results: list[np.ndarray | None] = [None] * len(texts)
+        results: list[np.ndarray] = [None] * len(texts)  # type: ignore[list-item]
         missing_texts: list[str] = []
         missing_indices: list[int] = []
-        for i, text in enumerate(texts):
-            vec = self._cache.get(text)
-            if vec is not None:
-                results[i] = vec
-            else:
-                missing_texts.append(text)
-                missing_indices.append(i)
+
+        with self._lock:
+            for i, text in enumerate(texts):
+                vec = self._cache.get(text)
+                if vec is not None:
+                    self._cache.move_to_end(text)
+                    results[i] = vec
+                else:
+                    missing_texts.append(text)
+                    missing_indices.append(i)
+
         if missing_texts:
-            computed = [self.embed(t) for t in missing_texts]
-            for idx, vec in zip(missing_indices, computed):
-                results[idx] = vec
-        return results  # type: ignore[return-value]
+            compute = self._compute
+            computed = [compute(t) for t in missing_texts]
+
+            with self._lock:
+                for text, idx, vec in zip(missing_texts, missing_indices, computed):
+                    results[idx] = vec
+                    self._cache[text] = vec
+                # Evict excess in one shot
+                excess = len(self._cache) - self._max_cache_size
+                for _ in range(excess):
+                    self._cache.popitem(last=False)
+
+        return results
 
     def similarity(self, vec1: Sequence[float] | np.ndarray, vec2: Sequence[float] | np.ndarray) -> float:
         """Compute cosine similarity."""

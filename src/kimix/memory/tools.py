@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from functools import partial
+from typing import Any, Awaitable, Callable, TypeVar
 
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from pydantic import BaseModel, Field
@@ -11,6 +12,7 @@ from pydantic import BaseModel, Field
 from kimix.memory.system import AgentMemorySystem
 from kimix.memory.types import MemoryType
 
+T = TypeVar("T")
 
 # Global memory system instance (initialized lazily)
 _memory_system: AgentMemorySystem | None = None
@@ -25,6 +27,11 @@ async def _get_memory_system() -> AgentMemorySystem:
             if _memory_system is None:
                 _memory_system = AgentMemorySystem()
     return _memory_system
+
+
+def _run_sync(func: Callable[..., T], *args: Any, **kwargs: Any) -> Awaitable[T]:
+    """Run a synchronous function in the default thread pool to avoid blocking the event loop."""
+    return asyncio.get_running_loop().run_in_executor(None, partial(func, *args, **kwargs))
 
 
 class RememberParams(BaseModel):
@@ -42,19 +49,13 @@ class Remember(CallableTool2):
     name: str = "Remember"
     description: str = "Store a fact, observation, or knowledge in memory."
     params: type[BaseModel] = RememberParams
-    def __init__(self):
-        super().__init__(self.name, self.description, self.params)
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_get_memory_system())
-        except RuntimeError:
-            asyncio.run(_get_memory_system())
 
     async def __call__(self, params: RememberParams) -> ToolReturnValue:
         try:
             memory = await _get_memory_system()
             if params.long_term:
-                entry = memory.remember(
+                entry = await _run_sync(
+                    memory.remember,
                     fact=params.content,
                     importance=params.importance,
                     tags=params.tags,
@@ -63,7 +64,8 @@ class Remember(CallableTool2):
                 )
                 return ToolOk(output=f"Remembered: {entry.content[:100]}... (importance: {entry.importance})")
             else:
-                entry = memory.perceive(
+                entry = await _run_sync(
+                    memory.perceive,
                     observation=params.content,
                     importance=params.importance,
                     tags=params.tags,
@@ -94,7 +96,8 @@ class Recall(CallableTool2):
     async def __call__(self, params: RecallParams) -> ToolReturnValue:
         try:
             memory = await _get_memory_system()
-            results = memory.recall(
+            results = await _run_sync(
+                memory.recall,
                 query=params.query,
                 context_size=params.context_size,
                 use_working=params.use_working,
@@ -131,7 +134,7 @@ class GetContext(CallableTool2):
     async def __call__(self, params: GetContextParams) -> ToolReturnValue:
         try:
             memory = await _get_memory_system()
-            context = memory.get_context_for_llm(params.query, max_tokens=params.max_tokens)
+            context = await _run_sync(memory.get_context_for_llm, params.query, max_tokens=params.max_tokens)
             return ToolOk(output=context)
         except Exception as e:
             return ToolError(message=str(e), output="", brief="Failed to generate context")
@@ -152,9 +155,9 @@ class Reflect(CallableTool2):
         try:
             memory = await _get_memory_system()
             if params.deep:
-                report = memory.self_reflect()
+                report = await _run_sync(memory.self_reflect)
             else:
-                report = memory.reflect()
+                report = await _run_sync(memory.reflect)
             return ToolOk(output=report)
         except Exception as e:
             return ToolError(message=str(e), output="", brief="Failed to reflect on memory")
@@ -177,7 +180,8 @@ class AddScar(CallableTool2):
     async def __call__(self, params: AddScarParams) -> ToolReturnValue:
         try:
             memory = await _get_memory_system()
-            memory.add_scar(
+            await _run_sync(
+                memory.add_scar,
                 failure_pattern=params.failure_pattern,
                 lesson=params.lesson,
                 trigger_conditions=params.trigger_conditions,
@@ -205,7 +209,8 @@ class AddRule(CallableTool2):
     async def __call__(self, params: AddRuleParams) -> ToolReturnValue:
         try:
             memory = await _get_memory_system()
-            memory.add_rule(
+            await _run_sync(
+                memory.add_rule,
                 condition=params.condition,
                 action=params.action,
                 priority=params.priority,

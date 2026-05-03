@@ -20,10 +20,10 @@ class IndexerParams(BaseModel):
 
 
 
-class SkillRag(CallableTool2[IndexerParams]):
+class SkillSearch(CallableTool2[IndexerParams]):
     """Indexer tool for semantic search over text files."""
 
-    name: str = "SkillRag"
+    name: str = "SkillSearch"
     description: str = "Search skills by keywords."
     params: type[IndexerParams] = IndexerParams
     file_builder_inited: bool = False

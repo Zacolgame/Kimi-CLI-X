@@ -6,6 +6,8 @@ import heapq
 import time
 from typing import List
 
+import numpy as np
+
 from kimix.memory.types import MemoryEntry, MemoryType
 from kimix.memory.embedding import EmbeddingProvider
 
@@ -32,12 +34,16 @@ class ShortTermMemory:
         if not self.buffer:
             return
         now = time.time()
-        min_idx, _ = min(
-            enumerate(self.buffer),
-            key=lambda x: x[1].get_effective_importance(now),
-        )
-        self.buffer[min_idx] = self.buffer[-1]
-        self.buffer.pop()
+        buf = self.buffer
+        min_idx = 0
+        min_val = buf[0].get_effective_importance(now)
+        for i in range(1, len(buf)):
+            val = buf[i].get_effective_importance(now)
+            if val < min_val:
+                min_val = val
+                min_idx = i
+        buf[min_idx] = buf[-1]
+        buf.pop()
 
     def _active_buffer(self, now: float | None = None) -> List[MemoryEntry]:
         """Return only non-expired entries."""
@@ -55,6 +61,7 @@ class ShortTermMemory:
         query: str,
         embedding_provider: EmbeddingProvider,
         top_k: int = 5,
+        query_vec: np.ndarray | None = None,
     ) -> List[MemoryEntry]:
         """Semantic search in short-term memory (skips expired)."""
         now = time.time()
@@ -62,16 +69,20 @@ class ShortTermMemory:
         if not active:
             return []
 
-        query_vec = embedding_provider.embed(query)
+        if query_vec is None:
+            query_vec = embedding_provider.embed(query)
 
-        # Batch-compute missing embeddings instead of one-by-one calls
-        missing_texts = [entry.content for entry in active if entry.embedding is None]
-        if missing_texts:
-            embeddings = embedding_provider.embed_batch(missing_texts)
-            emb_iter = iter(embeddings)
-            for entry in active:
-                if entry.embedding is None:
-                    entry.embedding = next(emb_iter)
+        # Batch-compute missing embeddings, touching only entries that need it
+        missing = [
+            (i, entry.content)
+            for i, entry in enumerate(active)
+            if entry.embedding is None
+        ]
+        if missing:
+            indices, texts = zip(*missing)
+            embeddings = embedding_provider.embed_batch(texts)
+            for i, emb in zip(indices, embeddings):
+                active[i].embedding = emb
 
         scored = [
             (
@@ -93,9 +104,21 @@ class ShortTermMemory:
     def get_recent(self, n: int = 10) -> List[MemoryEntry]:
         """Get recent n entries (skips expired)."""
         now = time.time()
-        active = self._active_buffer(now)
-        return heapq.nlargest(n, active, key=lambda x: x.timestamp)
+        cutoff = now - self.ttl
+
+        valid = [
+            e
+            for e in self.buffer
+            if e.timestamp > cutoff and (e.expires_at is None or e.expires_at > now)
+        ]
+        return heapq.nlargest(n, valid, key=lambda e: e.timestamp)
 
     def clear_expired(self) -> None:
         """Clean expired memories (both TTL and explicit expiry)."""
-        self.buffer = self._active_buffer(time.time())
+        now = time.time()
+        cutoff = now - self.ttl
+        self.buffer[:] = [
+            e
+            for e in self.buffer
+            if e.timestamp > cutoff and (e.expires_at is None or e.expires_at > now)
+        ]

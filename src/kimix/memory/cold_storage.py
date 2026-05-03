@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import gzip
 import json
 import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterable
+
+import numpy as np
 
 from kimix.memory.types import MemoryEntry
 
@@ -19,11 +20,14 @@ class ColdStorage:
     Memories are stored as JSON Lines inside gzip for efficient streaming.
     """
 
+    __slots__ = ("archive_dir", "_meta_path", "_blocks_cache", "_meta_cache")
+
     def __init__(self, archive_dir: str | Path = ".kimix_cache/cold_storage") -> None:
         self.archive_dir = Path(archive_dir)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         self._meta_path = self.archive_dir / "_meta.json"
         self._blocks_cache: list[tuple[str, int, int]] | None = None
+        self._meta_cache: dict[str, int] | None = None
 
     @staticmethod
     def _block_name(start_year: int, end_year: int) -> str:
@@ -52,7 +56,7 @@ class ColdStorage:
     def _entry_to_json(entry: MemoryEntry) -> str:
         """Fast serialization bypassing ``to_dict()`` (avoids ``get_effective_importance()``)."""
         embedding = entry.embedding
-        if embedding is not None and hasattr(embedding, "tolist"):
+        if isinstance(embedding, np.ndarray):
             embedding = embedding.tolist()
         return json.dumps(
             {
@@ -74,15 +78,20 @@ class ColdStorage:
         )
 
     def _read_meta(self) -> dict[str, int]:
+        if self._meta_cache is not None:
+            return self._meta_cache
         if self._meta_path.exists():
             try:
                 with open(self._meta_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    self._meta_cache = json.load(f)
+                    return self._meta_cache
             except Exception:
                 pass
-        return {}
+        self._meta_cache = {}
+        return self._meta_cache
 
     def _write_meta(self, meta: dict[str, int]) -> None:
+        self._meta_cache = meta
         tmp = self._meta_path.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(meta, f)
@@ -90,9 +99,22 @@ class ColdStorage:
 
     def _update_meta(self, block_name: str, delta: int) -> None:
         meta = self._read_meta()
-        meta[block_name] = meta.get(block_name, 0) + delta
-        if meta[block_name] <= 0:
+        new_count = meta.get(block_name, 0) + delta
+        if new_count <= 0:
             meta.pop(block_name, None)
+        else:
+            meta[block_name] = new_count
+        self._write_meta(meta)
+        self._blocks_cache = None
+
+    def _update_meta_batch(self, deltas: dict[str, int]) -> None:
+        meta = self._read_meta()
+        for block_name, delta in deltas.items():
+            new_count = meta.get(block_name, 0) + delta
+            if new_count <= 0:
+                meta.pop(block_name, None)
+            else:
+                meta[block_name] = new_count
         self._write_meta(meta)
         self._blocks_cache = None
 
@@ -106,13 +128,19 @@ class ColdStorage:
 
         If *start_year* and *end_year* are provided they override auto-detection.
         """
+        import gzip
+
+        dumps = self._entry_to_json
+        newline = b"\n"
+
         if start_year is not None and end_year is not None:
             block_path = self.archive_dir / self._block_name(start_year, end_year)
+            mode = "ab" if block_path.exists() else "wb"
             count = 0
-            mode = "at" if block_path.exists() else "wt"
-            with gzip.open(block_path, mode, encoding="utf-8") as f:
+            with gzip.open(block_path, mode) as f:
                 for entry in entries:
-                    f.write(self._entry_to_json(entry) + "\n")
+                    f.write(dumps(entry).encode("utf-8"))
+                    f.write(newline)
                     count += 1
             if count == 0:
                 raise ValueError("No entries to archive")
@@ -121,26 +149,28 @@ class ColdStorage:
 
         groups: dict[int, list[MemoryEntry]] = defaultdict(list)
         total = 0
+        gmtime = time.gmtime
         for entry in entries:
-            year = time.gmtime(entry.timestamp).tm_year
-            groups[year].append(entry)
+            groups[gmtime(entry.timestamp).tm_year].append(entry)
             total += 1
 
         if total == 0:
             raise ValueError("No entries to archive")
 
         first_path: Path | None = None
+        deltas: dict[str, int] = {}
         for year in sorted(groups):
             block_path = self.archive_dir / self._block_name(year, year)
-            mode = "at" if block_path.exists() else "wt"
+            mode = "ab" if block_path.exists() else "wb"
             group = groups[year]
-            with gzip.open(block_path, mode, encoding="utf-8") as f:
-                for entry in group:
-                    f.write(self._entry_to_json(entry) + "\n")
-            self._update_meta(block_path.name, len(group))
+            batch = b"\n".join(dumps(e).encode("utf-8") for e in group) + b"\n"
+            with gzip.open(block_path, mode) as f:
+                f.write(batch)
+            deltas[block_path.name] = len(group)
             if first_path is None:
                 first_path = block_path
 
+        self._update_meta_batch(deltas)
         assert first_path is not None
         return first_path
 
@@ -150,23 +180,28 @@ class ColdStorage:
         end_year: int,
     ) -> list[MemoryEntry]:
         """Restore all memories whose archive block overlaps the year range."""
+        import gzip
+
         results: list[MemoryEntry] = []
-        for path in self.archive_dir.glob("*.jsonl.gz"):
-            parsed = self._parse_block_name(path.name)
+        parse = self._parse_block_name
+        loads = json.loads
+        from_dict = MemoryEntry.from_dict
+        archive_dir = self.archive_dir
+
+        for path in archive_dir.glob("*.jsonl.gz"):
+            parsed = parse(path.name)
             if parsed is None:
                 continue
             block_start, block_end = parsed
             if block_end < start_year or block_start > end_year:
                 continue
-            with gzip.open(path, "rt", encoding="utf-8") as f:
+            with gzip.open(path, "rb") as f:
                 for line in f:
-                    line = line.rstrip("\n")
                     if not line:
                         continue
                     try:
-                        data = json.loads(line)
-                        entry = MemoryEntry.from_dict(data)
-                        results.append(entry)
+                        data = loads(line)
+                        results.append(from_dict(data))
                     except Exception:
                         continue
         return results
@@ -176,8 +211,9 @@ class ColdStorage:
         if self._blocks_cache is not None:
             return list(self._blocks_cache)
         archives: list[tuple[str, int, int]] = []
+        parse = self._parse_block_name
         for path in sorted(self.archive_dir.glob("*.jsonl.gz")):
-            parsed = self._parse_block_name(path.name)
+            parsed = parse(path.name)
             if parsed:
                 archives.append((path.name, parsed[0], parsed[1]))
         self._blocks_cache = archives

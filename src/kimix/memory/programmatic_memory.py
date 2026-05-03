@@ -24,18 +24,23 @@ class Trigger:
     payload: dict[str, Any] = field(default_factory=dict)
     last_fired: float = 0.0
     enabled: bool = True
+    _interval: float = field(init=False, repr=False, compare=False, default=0.0)
+    _is_interval: bool = field(init=False, repr=False, compare=False, default=False)
+
+    def __post_init__(self) -> None:
+        if self.trigger_type == TriggerType.SCHEDULE:
+            try:
+                self._interval = float(self.condition)
+                self._is_interval = True
+            except ValueError:
+                self._is_interval = False
 
     def should_fire(self, now: float | None = None) -> bool:
         """For SCHEDULE triggers: check if interval has passed."""
-        if self.trigger_type != TriggerType.SCHEDULE or not self.enabled:
+        if not self._is_interval or not self.enabled:
             return False
         now = now or time.time()
-        try:
-            interval = float(self.condition)
-        except ValueError:
-            # Non-numeric conditions are treated as event-only
-            return False
-        return (now - self.last_fired) >= interval
+        return (now - self.last_fired) >= self._interval
 
     def mark_fired(self, now: float | None = None) -> None:
         self.last_fired = now or time.time()
@@ -89,10 +94,10 @@ class ProgrammaticMemory:
 
     def __init__(self) -> None:
         self.workflows: dict[str, Workflow] = {}
-        # event_name -> workflow_names (set for O(1) add/discard)
-        self._event_handlers: dict[str, set[str]] = {}
-        # workflows that have at least one SCHEDULE trigger
-        self._schedule_workflows: set[str] = set()
+        # event_name -> {workflow_name: [Trigger, ...]}
+        self._event_index: dict[str, dict[str, list[Trigger]]] = {}
+        # workflow_name -> [schedule Trigger, ...]
+        self._schedule_index: dict[str, list[Trigger]] = {}
 
     def register_workflow(self, workflow: Workflow) -> None:
         """Register or overwrite a workflow."""
@@ -100,15 +105,14 @@ class ProgrammaticMemory:
         if old is not None:
             self._remove_indices(old)
         self.workflows[workflow.name] = workflow
-        # Index triggers
-        has_schedule = False
+        schedule_triggers: list[Trigger] = []
         for trigger in workflow.triggers:
             if trigger.trigger_type == TriggerType.EVENT:
-                self._event_handlers.setdefault(trigger.condition, set()).add(workflow.name)
+                self._event_index.setdefault(trigger.condition, {}).setdefault(workflow.name, []).append(trigger)
             elif trigger.trigger_type == TriggerType.SCHEDULE:
-                has_schedule = True
-        if has_schedule:
-            self._schedule_workflows.add(workflow.name)
+                schedule_triggers.append(trigger)
+        if schedule_triggers:
+            self._schedule_index[workflow.name] = schedule_triggers
 
     def unregister_workflow(self, name: str) -> bool:
         """Remove a workflow."""
@@ -120,14 +124,14 @@ class ProgrammaticMemory:
 
     def _remove_indices(self, wf: Workflow) -> None:
         """Remove a workflow from all internal indices."""
-        self._schedule_workflows.discard(wf.name)
+        self._schedule_index.pop(wf.name, None)
         for trigger in wf.triggers:
             if trigger.trigger_type == TriggerType.EVENT:
-                handlers = self._event_handlers.get(trigger.condition)
-                if handlers is not None:
-                    handlers.discard(wf.name)
-                    if not handlers:
-                        del self._event_handlers[trigger.condition]
+                event_map = self._event_index.get(trigger.condition)
+                if event_map is not None:
+                    event_map.pop(wf.name, None)
+                    if not event_map:
+                        del self._event_index[trigger.condition]
 
     def run_pending(
         self,
@@ -139,20 +143,18 @@ class ProgrammaticMemory:
         """
         results: dict[str, list[str]] = {}
         now = time.time()
-        # Only iterate workflows known to have schedule triggers
-        for name in self._schedule_workflows:
+        for name, triggers in self._schedule_index.items():
             wf = self.workflows.get(name)
             if wf is None or not wf.enabled:
                 continue
             fired = False
-            for trigger in wf.triggers:
-                if trigger.trigger_type == TriggerType.SCHEDULE and trigger.should_fire(now):
+            for trigger in triggers:
+                if trigger.should_fire(now):
                     trigger.mark_fired(now)
                     fired = True
             if not fired:
                 continue
             executed: list[str] = []
-            # Inline pending-task filter to avoid intermediate list allocation
             for task in wf.tasks:
                 if task.status != "pending":
                     continue
@@ -177,20 +179,22 @@ class ProgrammaticMemory:
     ) -> dict[str, list[str]]:
         """Fire an event trigger and run matching workflows."""
         results: dict[str, list[str]] = {}
-        for wf_name in self._event_handlers.get(event_name, ()):
+        event_map = self._event_index.get(event_name)
+        if event_map is None:
+            return results
+        payload = event_payload or {}
+        for wf_name, triggers in event_map.items():
             wf = self.workflows.get(wf_name)
             if wf is None or not wf.enabled:
                 continue
-            # Mark matching event triggers as fired
-            for trigger in wf.triggers:
-                if trigger.trigger_type == TriggerType.EVENT and trigger.condition == event_name:
-                    trigger.mark_fired()
+            for trigger in triggers:
+                trigger.mark_fired()
             executed: list[str] = []
             for task in wf.tasks:
                 if task.status != "pending":
                     continue
                 task.status = "running"
-                task.result = event_payload or {}
+                task.result = payload
                 task.status = "completed"
                 executed.append(task.name)
             if executed:

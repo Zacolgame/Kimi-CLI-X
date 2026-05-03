@@ -110,17 +110,20 @@ class AgentMemorySystem:
         if context_size <= 0:
             return results
 
+        # Compute query embedding once and share across tiers.
+        query_vec = self.embedding_provider.embed(query)
+
         if use_working:
             results["working"] = self.working.get_context(context_size)
 
         if use_short:
             results["short_term"] = self.short_term.search(
-                query, self.embedding_provider, top_k=context_size
+                query, self.embedding_provider, top_k=context_size, query_vec=query_vec
             )
 
         if use_long:
             results["long_term"] = self.long_term.retrieve(
-                query, top_k=context_size, tag_filter=tag_filter
+                query, top_k=context_size, tag_filter=tag_filter, query_vec=query_vec
             )
 
         # L4 Scar Triggers: if query matches historical failure patterns,
@@ -130,14 +133,13 @@ class AgentMemorySystem:
             matched_rules = self.procedural.match_rules(query, top_k=3)
             proc_entries: list[MemoryEntry] = []
             for scar in matched_scars:
-                proc_entries.append(scar.to_memory_entry())
+                scar_entry = scar.to_memory_entry()
+                proc_entries.append(scar_entry)
+                if scar.severity >= 7.0:
+                    self.working.add(scar_entry)
             for rule in matched_rules:
                 proc_entries.append(rule.to_memory_entry())
             results["procedural"] = proc_entries
-            # Elevate high-severity scars to working memory
-            for scar in matched_scars:
-                if scar.severity >= 7.0:
-                    self.working.add(scar.to_memory_entry())
 
         return results
 
@@ -265,14 +267,14 @@ class AgentMemorySystem:
         report_lines.append(f"Long-term entries: {ltm_count}")
 
         if self.long_term._backend is None:
-            low_access = [
-                e for e in self.long_term.entries.values()
-                if e.access_count < 2 and (now - e.last_accessed) > 7 * 86400
-            ]
-            high_access = [
-                e for e in self.long_term.entries.values()
-                if e.access_count >= 5
-            ]
+            low_access: list[MemoryEntry] = []
+            high_access: list[MemoryEntry] = []
+            week_ago = now - 7 * 86400
+            for e in self.long_term.entries.values():
+                if e.access_count < 2 and e.last_accessed < week_ago:
+                    low_access.append(e)
+                elif e.access_count >= 5:
+                    high_access.append(e)
             # Down-rank stale memories
             for entry in low_access:
                 entry.importance = max(0.1, entry.importance * 0.8)

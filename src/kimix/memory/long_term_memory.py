@@ -9,9 +9,11 @@ import os
 import time
 from typing import Dict, List, Optional, Set
 
+import numpy as np
+
 from kimix.memory.types import MemoryEntry, MemoryType
 from kimix.memory.embedding import EmbeddingProvider
-from kimix.memory.retrieval import InvertedIndex, NgramTokenizer, BM25Scorer, Searcher
+from kimix.memory.retrieval import InvertedIndex, NgramTokenizer, Searcher
 
 
 class LongTermMemory:
@@ -63,7 +65,7 @@ class LongTermMemory:
     # --- Internal helpers ---
 
     def _hash(self, content: str) -> str:
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
+        return hashlib.blake2b(content.encode(), digest_size=8).hexdigest()
 
     def _update_index(self, entry_id: str, entry: MemoryEntry) -> None:
         for tag in entry.tags:
@@ -73,6 +75,8 @@ class LongTermMemory:
         self._bm25_index = None
         self._bm25_searcher = None
         self._bm25_doc_to_entry_id = []
+        self._doc_id_map = {}
+        self._next_doc_id = 0
 
     def _insert_entry(self, entry_id: str, entry: MemoryEntry, *, invalidate_bm25: bool = True) -> None:
         if self._backend is not None:
@@ -93,8 +97,7 @@ class LongTermMemory:
         self._next_doc_id = 0
         if self._backend is not None:
             # Fast path: avoid deserialising embeddings and full MemoryEntry objects.
-            import time as _time
-            now = _time.time()
+            now = time.time()
             for eid, content, expires_at in self._backend.iter_rows(
                 agent_id=self._agent_id, exclude_expired=False
             ):
@@ -172,7 +175,7 @@ class LongTermMemory:
             return
         data = [e.to_dict() for e in self.entries.values()]
         with open(self.storage_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
         self._dirty = False
 
     # --- Public API ---
@@ -212,6 +215,7 @@ class LongTermMemory:
         min_importance: float = 0.0,
         use_hybrid: bool = True,
         bm25_weight: float = 0.3,
+        query_vec: np.ndarray | None = None,
     ) -> List[MemoryEntry]:
         """Hybrid semantic + BM25 retrieval from long-term memory.
 
@@ -221,10 +225,11 @@ class LongTermMemory:
         if self._backend is None and not self.entries:
             return []
 
-        query_vec = self.embedding_provider.embed(query)
+        if query_vec is None:
+            query_vec = self.embedding_provider.embed(query)
         now = time.time()
 
-        # Collect candidates
+        # Collect candidates (filter expiry and importance during iteration)
         candidates: list[MemoryEntry] = []
         candidate_ids: list[str] = []
         if tag_filter:
@@ -233,9 +238,12 @@ class LongTermMemory:
                     tag_filter, agent_id=self._agent_id, dim=self.dim
                 )
                 for eid, entry in raw:
-                    if entry.expires_at is None or entry.expires_at > now:
-                        candidates.append(entry)
-                        candidate_ids.append(eid)
+                    if entry.expires_at is not None and entry.expires_at <= now:
+                        continue
+                    if entry.importance < min_importance:
+                        continue
+                    candidates.append(entry)
+                    candidate_ids.append(eid)
             else:
                 filtered_ids: Optional[Set[str]] = None
                 for tag in tag_filter:
@@ -251,67 +259,78 @@ class LongTermMemory:
                 for eid in filtered_ids:
                     entry = self.entries.get(eid)
                     if entry is not None and (entry.expires_at is None or entry.expires_at > now):
-                        candidates.append(entry)
-                        candidate_ids.append(eid)
+                        if entry.importance >= min_importance:
+                            candidates.append(entry)
+                            candidate_ids.append(eid)
         else:
             for eid, entry in self._iter_entries():
                 if entry.expires_at is None or entry.expires_at > now:
-                    candidates.append(entry)
-                    candidate_ids.append(eid)
+                    if entry.importance >= min_importance:
+                        candidates.append(entry)
+                        candidate_ids.append(eid)
 
-        if min_importance > 0.0:
-            candidates = [e for e in candidates if e.importance >= min_importance]
-
-        if not candidates:
+        if not candidates or top_k <= 0:
             return []
 
-        # Ensure embeddings
-        for entry in candidates:
-            if entry.embedding is None:
-                entry.embedding = self.embedding_provider.embed(entry.content)
+        # Batch-embed missing vectors
+        missing = [entry for entry in candidates if entry.embedding is None]
+        if missing:
+            texts = [e.content for e in missing]
+            vecs = self.embedding_provider.embed_batch(texts)
+            for entry, vec in zip(missing, vecs):
+                entry.embedding = vec
 
-        # Semantic scores
-        semantic_scores: dict[str, float] = {}
-        for eid, entry in zip(candidate_ids, candidates):
-            sim = self.embedding_provider.similarity(query_vec, entry.embedding)  # type: ignore[arg-type]
-            semantic_scores[eid] = sim * entry.get_effective_importance()
+        # Vectorised semantic similarity
+        embeddings = np.array([entry.embedding for entry in candidates], dtype=np.float32)
+        query_arr = np.asarray(query_vec, dtype=np.float32)
+        q_norm = np.linalg.norm(query_arr)
+        norms = np.linalg.norm(embeddings, axis=1)
+        if q_norm == 0:
+            semantic_arr = np.zeros(len(candidates), dtype=np.float64)
+        else:
+            dots = embeddings @ query_arr
+            with np.errstate(divide="ignore", invalid="ignore"):
+                sims = np.where(norms == 0, 0.0, dots / (norms * q_norm))
+            eff = np.array([entry.get_effective_importance(now) for entry in candidates], dtype=np.float64)
+            semantic_arr = sims.astype(np.float64) * eff
 
-        # BM25 scores
-        bm25_scores: dict[str, float] = {}
+        # BM25 scores (single-pass min-max normalisation)
+        bm25_arr = np.zeros(len(candidates), dtype=np.float64)
         if use_hybrid:
             searcher = self._ensure_bm25()
             bm25_results = searcher.search(query, top_k=len(candidates))
-            # bm25_results: list[(doc_id, score)]
             if bm25_results:
-                max_bm25 = max(score for _, score in bm25_results)
-                min_bm25 = min(score for _, score in bm25_results)
+                max_bm25 = bm25_results[0][1]
+                min_bm25 = max_bm25
+                for _, score in bm25_results[1:]:
+                    if score > max_bm25:
+                        max_bm25 = score
+                    elif score < min_bm25:
+                        min_bm25 = score
                 bm25_range = max_bm25 - min_bm25 if max_bm25 != min_bm25 else 1.0
+                eid_to_idx = {eid: i for i, eid in enumerate(candidate_ids)}
                 doc_to_eid = self._bm25_doc_to_entry_id
                 for doc_id, score in bm25_results:
-                    eid = doc_to_eid[doc_id]
-                    bm25_scores[eid] = (score - min_bm25) / bm25_range
+                    idx = eid_to_idx.get(doc_to_eid[doc_id])
+                    if idx is not None:
+                        bm25_arr[idx] = (score - min_bm25) / bm25_range
 
-        # Hybrid fusion
-        def _final_score(entry_idx: int) -> float:
-            eid = candidate_ids[entry_idx]
-            sem = semantic_scores.get(eid, 0.0)
-            bm25 = bm25_scores.get(eid, 0.0)
-            return (1.0 - bm25_weight) * sem + bm25_weight * bm25
-
-        scored = [(i, _final_score(i)) for i in range(len(candidates))]
-        if top_k * 4 < len(scored):
-            top_indices = [i for i, _ in heapq.nlargest(top_k, scored, key=lambda x: x[1])]
+        # Hybrid fusion (vectorised)
+        final = (1.0 - bm25_weight) * semantic_arr + bm25_weight * bm25_arr
+        n = len(final)
+        if top_k * 4 < n:
+            top_indices = np.argpartition(final, -top_k)[-top_k:]
+            top_indices = top_indices[np.argsort(final[top_indices])[::-1]]
         else:
-            scored.sort(key=lambda x: x[1], reverse=True)
-            top_indices = [i for i, _ in scored[:top_k]]
-
+            top_indices = np.argsort(final)[::-1][:top_k]
+        top_indices = top_indices.tolist()
         results = [candidates[i] for i in top_indices]
 
         if self._backend is not None:
-            eids = [self._hash(entry.content) for entry in results]
+            eids = [candidate_ids[i] for i in top_indices]
             self._backend.update_access_many(eids)
         for entry in results:
-            entry.touch()
+            entry.touch(now)
 
         # Note: access-count bumps are *not* persisted to JSON on every retrieve
         # to avoid O(N) JSON rewrites on the read path.  They survive until the
