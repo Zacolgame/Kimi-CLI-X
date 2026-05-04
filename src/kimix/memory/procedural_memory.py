@@ -6,7 +6,6 @@ import heapq
 import re
 import time
 from dataclasses import dataclass, field
-from itertools import chain
 from typing import Any
 
 from kimix.memory.types import MemoryEntry, MemoryType
@@ -60,11 +59,15 @@ class RuleEntry:
 
     _cond_lower: str = field(init=False, repr=False, compare=False, default="")
     _cond_words: frozenset[str] = field(init=False, repr=False, compare=False, default_factory=frozenset)
+    _cond_words_inv_len: float = field(init=False, repr=False, compare=False, default=0.0)
 
     def __post_init__(self) -> None:
         cond_lower = self.condition.lower()
+        cond_words = frozenset(_WORD_RE.findall(cond_lower))
         object.__setattr__(self, "_cond_lower", cond_lower)
-        object.__setattr__(self, "_cond_words", frozenset(_WORD_RE.findall(cond_lower)))
+        object.__setattr__(self, "_cond_words", cond_words)
+        if cond_words:
+            object.__setattr__(self, "_cond_words_inv_len", 1.0 / len(cond_words))
 
     def to_memory_entry(self) -> MemoryEntry:
         return MemoryEntry(
@@ -88,6 +91,7 @@ class ProceduralMemory:
         self.scars: list[ScarEntry] = []
         self.rules: list[RuleEntry] = []
         self._rules_dirty: bool = False
+        self._entries_cache: list[MemoryEntry] | None = None
 
     # --- Scars ---
 
@@ -108,20 +112,21 @@ class ProceduralMemory:
             metadata=metadata or {},
         )
         self.scars.append(scar)
+        self._entries_cache = None
         return scar
 
     def match_scars(self, query: str, top_k: int = 3) -> list[ScarEntry]:
         """Return scars whose trigger conditions match *query*."""
         query_lower = query.lower()
-        scored: list[tuple[float, int, ScarEntry]] = []
-        for idx, scar in enumerate(self.scars):
-            score = 0.0
-            for cond in scar._trigger_lower:
-                if cond in query_lower:
-                    score += 1.0
-            if score:
-                scored.append((score * scar.severity, idx, scar))
-        return [s[2] for s in heapq.nlargest(top_k, scored)]
+        def _gen():
+            for idx, scar in enumerate(self.scars):
+                score = 0.0
+                for cond in scar._trigger_lower:
+                    if cond in query_lower:
+                        score += 1.0
+                if score:
+                    yield (score * scar.severity, idx, scar)
+        return [s[2] for s in heapq.nlargest(top_k, _gen())]
 
     # --- Rules ---
 
@@ -143,6 +148,7 @@ class ProceduralMemory:
         )
         self.rules.append(rule)
         self._rules_dirty = True
+        self._entries_cache = None
         return rule
 
     def _ensure_rules_sorted(self) -> None:
@@ -155,20 +161,18 @@ class ProceduralMemory:
         self._ensure_rules_sorted()
         ctx_lower = context.lower()
         ctx_words = set(_WORD_RE.findall(ctx_lower))
-        scored: list[tuple[float, int, RuleEntry]] = []
-        for idx, rule in enumerate(self.rules):
-            score = 0.0
-            # Exact phrase match
-            if rule._cond_lower in ctx_lower:
-                score += 2.0
-            # Word overlap
-            cond_words = rule._cond_words
-            if cond_words:
-                overlap = len(cond_words & ctx_words) / len(cond_words)
-                score += overlap
-            if score:
-                scored.append((score * rule.priority, idx, rule))
-        return [r[2] for r in heapq.nlargest(top_k, scored)]
+        def _gen():
+            for idx, rule in enumerate(self.rules):
+                score = 0.0
+                if rule._cond_lower in ctx_lower:
+                    score += 2.0
+                cond_words = rule._cond_words
+                if cond_words:
+                    overlap = len(cond_words & ctx_words) * rule._cond_words_inv_len
+                    score += overlap
+                if score:
+                    yield (score * rule.priority, idx, rule)
+        return [r[2] for r in heapq.nlargest(top_k, _gen())]
 
     # --- Unified ---
 
@@ -181,10 +185,13 @@ class ProceduralMemory:
 
     def to_entries(self) -> list[MemoryEntry]:
         """Export all scars and rules as MemoryEntries."""
-        return list(chain(
-            (s.to_memory_entry() for s in self.scars),
-            (r.to_memory_entry() for r in self.rules),
-        ))
+        cache = self._entries_cache
+        if cache is not None:
+            return cache.copy()
+        cache = [s.to_memory_entry() for s in self.scars]
+        cache.extend(r.to_memory_entry() for r in self.rules)
+        self._entries_cache = cache
+        return cache.copy()
 
     def reflect(self) -> str:
         """Status report."""

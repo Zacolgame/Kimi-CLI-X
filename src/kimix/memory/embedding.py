@@ -83,12 +83,18 @@ class EmbeddingProvider:
 
     def similarity(self, vec1: Sequence[float] | np.ndarray, vec2: Sequence[float] | np.ndarray) -> float:
         """Compute cosine similarity."""
-        v1 = np.asarray(vec1, dtype=np.float32)
-        v2 = np.asarray(vec2, dtype=np.float32)
-        norm1 = np.linalg.norm(v1)
-        if norm1 == 0:
+        if isinstance(vec1, np.ndarray):
+            v1 = vec1
+        else:
+            v1 = np.asarray(vec1, dtype=np.float32)
+        if isinstance(vec2, np.ndarray):
+            v2 = vec2
+        else:
+            v2 = np.asarray(vec2, dtype=np.float32)
+        dot = np.dot(v1, v2)
+        if dot == 0:
             return 0.0
-        norm2 = np.linalg.norm(v2)
-        if norm2 == 0:
+        norms = np.sqrt(np.dot(v1, v1) * np.dot(v2, v2))
+        if norms == 0:
             return 0.0
-        return float(np.dot(v1, v2) / (norm1 * norm2))
+        return float(dot / norms)

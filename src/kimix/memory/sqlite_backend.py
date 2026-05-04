@@ -57,6 +57,7 @@ class SQLiteBackend:
         FOREIGN KEY (entry_id) REFERENCES memories(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_memory_tags_tag ON memory_tags(tag);
+    CREATE INDEX IF NOT EXISTS idx_memory_tags_tag_entry ON memory_tags(tag, entry_id);
     """
 
     def __init__(self, db_path: str | Path = ".kimix_cache/memory.db") -> None:
@@ -92,6 +93,8 @@ class SQLiteBackend:
     def _embedding_to_blob(embedding: np.ndarray | list[float] | None) -> bytes | None:
         if embedding is None:
             return None
+        if isinstance(embedding, np.ndarray) and embedding.dtype == np.float32:
+            return embedding.tobytes()
         arr = np.asarray(embedding, dtype=np.float32)
         return arr.tobytes()
 
@@ -99,23 +102,29 @@ class SQLiteBackend:
     def _blob_to_embedding(blob: bytes | None, dim: int = 384) -> np.ndarray | None:
         if blob is None:
             return None
-        return np.frombuffer(blob, dtype=np.float32).copy()
+        # Return a view (not a copy) for speed; caller should copy if mutation is required.
+        return np.frombuffer(blob, dtype=np.float32).reshape(-1)
 
     @staticmethod
     def _row_to_entry(row: sqlite3.Row, dim: int = 384) -> MemoryEntry:
+        # Use integer indices for sqlite3.Row (faster than string keys).
+        jl = json.loads
+        emb = row[7]
+        if emb is not None:
+            emb = np.frombuffer(emb, dtype=np.float32).reshape(-1)
         return MemoryEntry(
-            content=row["content"],
-            memory_type=MemoryType(row["memory_type"]),
-            timestamp=row["timestamp"],
-            importance=row["importance"],
-            access_count=row["access_count"],
-            last_accessed=row["last_accessed"],
-            embedding=SQLiteBackend._blob_to_embedding(row["embedding"], dim),
-            tags=json.loads(row["tags"]) if row["tags"] else [],
-            source=row["source"] or "",
-            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
-            expires_at=row["expires_at"],
-            agent_id=row["agent_id"],
+            content=row[1],
+            memory_type=MemoryType(row[2]),
+            timestamp=row[3],
+            importance=row[4],
+            access_count=row[5],
+            last_accessed=row[6],
+            embedding=emb,
+            tags=jl(row[8]) if row[8] is not None else [],
+            source=row[9] or "",
+            metadata=jl(row[10]) if row[10] is not None else {},
+            expires_at=row[11],
+            agent_id=row[12],
         )
 
     def _insert_tags(self, entry_id: str, tags: list[str]) -> None:
@@ -133,6 +142,8 @@ class SQLiteBackend:
 
     def store(self, entry: MemoryEntry, entry_id: str, dim: int = 384) -> None:
         """Insert or replace a memory entry."""
+        tags_blob = json.dumps(entry.tags, ensure_ascii=False) if entry.tags else None
+        meta_blob = json.dumps(entry.metadata, ensure_ascii=False) if entry.metadata else None
         with self._conn:
             self._conn.execute(
                 """
@@ -150,15 +161,16 @@ class SQLiteBackend:
                     entry.access_count,
                     entry.last_accessed,
                     self._embedding_to_blob(entry.embedding),
-                    json.dumps(entry.tags, ensure_ascii=False),
+                    tags_blob,
                     entry.source,
-                    json.dumps(entry.metadata, ensure_ascii=False),
+                    meta_blob,
                     entry.expires_at,
                     entry.agent_id,
                 ),
             )
-            self._delete_tags(entry_id)
-            self._insert_tags(entry_id, entry.tags)
+            if entry.tags:
+                self._delete_tags(entry_id)
+                self._insert_tags(entry_id, entry.tags)
 
     def store_many(self, items: list[tuple[str, MemoryEntry]], dim: int = 384) -> None:
         """Batch insert/replace entries in a single transaction."""
@@ -175,15 +187,15 @@ class SQLiteBackend:
                 entry.access_count,
                 entry.last_accessed,
                 self._embedding_to_blob(entry.embedding),
-                json.dumps(entry.tags, ensure_ascii=False),
+                json.dumps(entry.tags, ensure_ascii=False) if entry.tags else None,
                 entry.source,
-                json.dumps(entry.metadata, ensure_ascii=False),
+                json.dumps(entry.metadata, ensure_ascii=False) if entry.metadata else None,
                 entry.expires_at,
                 entry.agent_id,
             )
             for entry_id, entry in items
         ]
-        tag_delete_params = [(entry_id,) for entry_id, _ in items]
+        tag_delete_params = [(entry_id,) for entry_id, entry in items if entry.tags]
         tag_insert_params = [
             (entry_id, tag)
             for entry_id, entry in items
@@ -249,7 +261,7 @@ class SQLiteBackend:
         rows = self._conn.execute(
             f"SELECT * FROM memories {where} ORDER BY timestamp DESC", params
         ).fetchall()
-        return [(row["id"], self._row_to_entry(row, dim)) for row in rows]
+        return [(row[0], self._row_to_entry(row, dim)) for row in rows]
 
     def iter_rows(
         self,
@@ -289,12 +301,19 @@ class SQLiteBackend:
 
     def update_access_many(self, entry_ids: list[str], now: float | None = None) -> None:
         """Batch-bump access counters."""
+        if not entry_ids:
+            return
         now = now or time.time()
+        # Chunk to stay well below SQLite host-parameter limits.
+        chunk_size = 900
         with self._conn:
-            self._conn.executemany(
-                "UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id = ?",
-                [(now, eid) for eid in entry_ids],
-            )
+            for i in range(0, len(entry_ids), chunk_size):
+                chunk = entry_ids[i : i + chunk_size]
+                placeholders = ",".join("?" * len(chunk))
+                self._conn.execute(
+                    f"UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE id IN ({placeholders})",
+                    (now, *chunk),
+                )
 
     def update_importance(self, entry_id: str, importance: float) -> None:
         with self._conn:
@@ -360,12 +379,21 @@ class SQLiteBackend:
         params.append(len(tags))
 
         rows = self._conn.execute(sql, params).fetchall()
-        return [(row["id"], self._row_to_entry(row, dim)) for row in rows]
+        return [(row[0], self._row_to_entry(row, dim)) for row in rows]
 
     def close(self) -> None:
         self._conn.close()
 
     def reflect(self) -> str:
-        total = self.count(exclude_expired=False)
-        expired = total - self.count(exclude_expired=True)
+        now = time.time()
+        row = self._conn.execute(
+            """
+            SELECT COUNT(*),
+                   COUNT(CASE WHEN expires_at IS NOT NULL AND expires_at <= ? THEN 1 END)
+            FROM memories
+            """,
+            (now,),
+        ).fetchone()
+        total = row[0] if row else 0
+        expired = row[1] if row else 0
         return f"SQLite Backend: {total} rows ({expired} expired)"

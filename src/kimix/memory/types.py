@@ -53,35 +53,45 @@ class MemoryEntry:
 
     def is_expired(self, now: float | None = None) -> bool:
         """Check whether this memory has passed its expiry time."""
-        if self.expires_at is None:
+        ea = self.expires_at
+        if ea is None:
             return False
         if now is None:
             now = time.time()
-        return now > self.expires_at
+        return now > ea
 
     def get_effective_importance(self, now: float | None = None) -> float:
         """Calculate effective importance (time decay + access frequency)."""
         if now is None:
             now = time.time()
         recency_factor = math.exp(_DECAY_COEFF * (now - self.timestamp))
-        access_boost = min(self.access_count * 0.1, 2.0)
-        return self.importance * recency_factor * (1 + access_boost)
+        ac = self.access_count
+        access_boost = ac * 0.1 if ac < 20 else 2.0
+        return self.importance * recency_factor * (1.0 + access_boost)
 
     def touch(self, now: float | None = None) -> None:
         """Mark as accessed."""
         self.access_count += 1
-        self.last_accessed = time.time() if now is None else now
+        if now is None:
+            now = time.time()
+        self.last_accessed = now
 
     def to_dict(self, now: float | None = None) -> dict[str, Any]:
         embedding = self.embedding
-        if isinstance(embedding, np.ndarray):
+        if type(embedding) is np.ndarray:
             embedding = embedding.tolist()
+        if now is None:
+            now = time.time()
+        ac = self.access_count
+        access_boost = ac * 0.1 if ac < 20 else 2.0
+        recency_factor = math.exp(_DECAY_COEFF * (now - self.timestamp))
+        effective = self.importance * recency_factor * (1.0 + access_boost)
         return {
             "content": self.content,
             "memory_type": self.memory_type.value,
             "timestamp": self.timestamp,
             "importance": self.importance,
-            "access_count": self.access_count,
+            "access_count": ac,
             "last_accessed": self.last_accessed,
             "embedding": embedding,
             "tags": self.tags,
@@ -89,20 +99,19 @@ class MemoryEntry:
             "metadata": self.metadata,
             "expires_at": self.expires_at,
             "agent_id": self.agent_id,
-            "effective_importance": self.get_effective_importance(now),
+            "effective_importance": effective,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MemoryEntry:
         """Reconstruct a MemoryEntry from a plain dict."""
-        now = time.time()
         return cls(
             content=data["content"],
             memory_type=MemoryType(data["memory_type"]),
-            timestamp=data.get("timestamp", now),
+            timestamp=data["timestamp"] if "timestamp" in data else time.time(),
             importance=data.get("importance", 1.0),
             access_count=data.get("access_count", 0),
-            last_accessed=data.get("last_accessed", now),
+            last_accessed=data["last_accessed"] if "last_accessed" in data else time.time(),
             embedding=data.get("embedding"),
             tags=data.get("tags", []),
             source=data.get("source", ""),

@@ -338,6 +338,75 @@ class BM25Scorer:
         nonzero = np.flatnonzero(scores_arr)
         return {int(i): float(scores_arr[i]) for i in nonzero}
 
+    def score_topk(
+        self,
+        query_tokens: list[str],
+        top_k: int,
+        candidate_docs: set[int] | None = None,
+    ) -> list[tuple[int, float]]:
+        """Accumulate BM25 scores and return the top-*k* results.
+
+        This is significantly faster than :meth:`score` followed by manual
+        top-*k* selection when the number of documents is large, because it
+        avoids materialising a full ``dict`` of all nonzero scores.
+        """
+        N = self.index.N
+        if N == 0 or self._denom_base is None or top_k <= 0:
+            return []
+
+        k1_plus_1 = self.k1 + 1.0
+        scores_arr = np.zeros(N, dtype=np.float64)
+        denom_base = self._denom_base
+
+        if candidate_docs is not None:
+            cand_sorted = np.array(sorted(candidate_docs), dtype=np.int32)
+            for token in query_tokens:
+                postings = self.index.get_postings(token)
+                if postings is None:
+                    continue
+                docs, tfs = postings
+                if len(cand_sorted) <= 256:
+                    idx = np.searchsorted(cand_sorted, docs)
+                    idx = np.clip(idx, 0, len(cand_sorted) - 1)
+                    valid = cand_sorted[idx] == docs
+                else:
+                    valid = np.isin(docs, cand_sorted)
+                if not np.any(valid):
+                    continue
+                docs = docs[valid]
+                tfs = tfs[valid]
+                df = len(docs)
+                if df == 0:
+                    continue
+                idf = self._idf(df, N)
+                tfs_f = tfs.astype(np.float64)
+                denom = tfs_f + denom_base[docs]
+                token_scores = idf * tfs_f * k1_plus_1 / denom
+                scores_arr[docs] += token_scores
+        else:
+            for token in query_tokens:
+                postings = self.index.get_postings(token)
+                if postings is None:
+                    continue
+                docs, tfs = postings
+                df = len(docs)
+                idf = self._idf(df, N)
+                tfs_f = tfs.astype(np.float64)
+                denom = tfs_f + denom_base[docs]
+                token_scores = idf * tfs_f * k1_plus_1 / denom
+                scores_arr[docs] += token_scores
+
+        if top_k >= N:
+            nonzero = np.flatnonzero(scores_arr)
+            return [(int(i), float(scores_arr[i])) for i in nonzero]
+
+        partitioned = np.argpartition(scores_arr, -top_k)[-top_k:]
+        mask = scores_arr[partitioned] > 0
+        top_indices = partitioned[mask]
+        top_scores = scores_arr[top_indices]
+        order = np.argsort(-top_scores)
+        return [(int(top_indices[i]), float(top_scores[i])) for i in order]
+
 
 class LevenshteinAutomaton:
     """Damerau-Levenshtein automaton for fuzzy term expansion."""
@@ -449,13 +518,13 @@ class LevenshteinAutomaton:
                 if not bucket and prefix_length > 0:
                     continue
                 candidates = bucket or dictionary._terms_by_length.get(length, ())  # type: ignore[attr-defined]
+                # When prefix_length == 1, candidates already come from
+                # _terms_by_length_prefix which is keyed by (length, first_char),
+                # so the prefix check is redundant.
                 if prefix_length == 1:
-                    p0 = prefix[0]
                     for term in candidates:
                         if len(results) >= max_expansions:
                             return results
-                        if term[0] != p0:
-                            continue
                         if has_freq_filter and self._freq_lower_bound(term) > max_edits:
                             continue
                         if dl(self.pattern, term) <= max_edits:
@@ -605,12 +674,4 @@ class Searcher:
             return []
 
         expanded_tokens = list(dict.fromkeys(expanded_tokens))
-        scores = self.scorer.score(expanded_tokens)
-        if not scores:
-            return []
-
-        if top_k * 10 < len(scores):
-            ranked = heapq.nlargest(top_k, scores.items(), key=lambda x: x[1])
-        else:
-            ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        return ranked[:top_k]
+        return self.scorer.score_topk(expanded_tokens, top_k=top_k)

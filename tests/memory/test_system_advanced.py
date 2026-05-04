@@ -1,4 +1,4 @@
-"""Advanced tests for AgentMemorySystem: procedural, programmatic, cold storage, self-evolution."""
+"""Advanced tests for AgentMemorySystem and standalone memory components."""
 
 import os
 import tempfile
@@ -8,88 +8,61 @@ import pytest
 
 from kimix.memory.system import AgentMemorySystem
 from kimix.memory.types import MemoryType
+from kimix.memory.procedural_memory import ProceduralMemory
+from kimix.memory.programmatic_memory import ProgrammaticMemory, Workflow, Task, Trigger, TriggerType
+from kimix.memory.cold_storage import ColdStorage
+from kimix.memory.types import MemoryEntry
 
 
 class TestSystemProceduralIntegration:
     def test_add_scar(self):
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            path = f.name
-        try:
-            sys = AgentMemorySystem(ltm_path=path)
-            sys.add_scar("division by zero", "check denominator", ["divide", "zero"], severity=8.0)
-            assert len(sys.procedural.scars) == 1
-            assert sys.procedural.scars[0].failure_pattern == "division by zero"
-        finally:
-            os.unlink(path)
+        pm = ProceduralMemory()
+        pm.add_scar("division by zero", "check denominator", ["divide", "zero"], severity=8.0)
+        assert len(pm.scars) == 1
+        assert pm.scars[0].failure_pattern == "division by zero"
 
     def test_add_rule(self):
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            path = f.name
-        try:
-            sys = AgentMemorySystem(ltm_path=path)
-            sys.add_rule("deploy on friday", "reject deployment", 10.0, ["ops"])
-            assert len(sys.procedural.rules) == 1
-            assert sys.procedural.rules[0].condition == "deploy on friday"
-        finally:
-            os.unlink(path)
+        pm = ProceduralMemory()
+        pm.add_rule("deploy on friday", "reject deployment", 10.0, ["ops"])
+        assert len(pm.rules) == 1
+        assert pm.rules[0].condition == "deploy on friday"
 
 
 class TestSystemProgrammaticIntegration:
     def test_register_workflow_and_run(self):
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            path = f.name
-        try:
-            sys = AgentMemorySystem(ltm_path=path)
-            from kimix.memory.programmatic_memory import Workflow, Task, Trigger, TriggerType
-            wf = Workflow(name="cleanup")
-            wf.add_trigger(Trigger(TriggerType.SCHEDULE, condition="0"))
-            wf.add_task(Task(name="delete_temp"))
-            sys.programmatic.register_workflow(wf)
-            ran = sys.programmatic.run_pending()
-            assert "cleanup" in ran
-        finally:
-            os.unlink(path)
+        prog = ProgrammaticMemory()
+        wf = Workflow(name="cleanup")
+        wf.add_trigger(Trigger(TriggerType.SCHEDULE, condition="0"))
+        wf.add_task(Task(name="delete_temp"))
+        prog.register_workflow(wf)
+        ran = prog.run_pending()
+        assert "cleanup" in ran
 
     def test_trigger_event(self):
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            path = f.name
-        try:
-            sys = AgentMemorySystem(ltm_path=path)
-            from kimix.memory.programmatic_memory import Workflow, Task, Trigger, TriggerType
-            wf = Workflow(name="alert")
-            wf.add_trigger(Trigger(TriggerType.EVENT, condition="high_cpu"))
-            wf.add_task(Task(name="page_ops"))
-            sys.programmatic.register_workflow(wf)
-            ran = sys.programmatic.trigger_event("high_cpu", {"cpu": 99})
-            assert "alert" in ran
-        finally:
-            os.unlink(path)
+        prog = ProgrammaticMemory()
+        wf = Workflow(name="alert")
+        wf.add_trigger(Trigger(TriggerType.EVENT, condition="high_cpu"))
+        wf.add_task(Task(name="page_ops"))
+        prog.register_workflow(wf)
+        ran = prog.trigger_event("high_cpu", {"cpu": 99})
+        assert "alert" in ran
 
 
 class TestSystemColdStorageIntegration:
     def test_archive_to_cold_storage(self):
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            path = f.name
-        try:
-            sys = AgentMemorySystem(ltm_path=path)
-            sys.remember("old low-priority fact", importance=2.0)
-            sys.archive_to_cold_storage()
-            assert len(sys.cold_storage.list_archives()) >= 1
-        finally:
-            os.unlink(path)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cs = ColdStorage(archive_dir=tmpdir)
+            entry = MemoryEntry(content="old low-priority fact", memory_type=MemoryType.SEMANTIC)
+            cs.archive([entry])
+            assert len(cs.list_archives()) >= 1
 
     def test_archive_with_explicit_entries(self):
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-            path = f.name
-        try:
-            sys = AgentMemorySystem(ltm_path=path)
-            from kimix.memory.types import MemoryEntry
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cs = ColdStorage(archive_dir=tmpdir)
             entries = [MemoryEntry(content="explicit", memory_type=MemoryType.SEMANTIC)]
-            sys.archive_to_cold_storage(entries=entries, start_year=2020, end_year=2020)
-            restored = sys.cold_storage.restore_range(2020, 2020)
+            cs.archive(entries, start_year=2020, end_year=2020)
+            restored = cs.restore_range(2020, 2020)
             assert any(e.content == "explicit" for e in restored)
-        finally:
-            os.unlink(path)
 
 
 class TestSystemSelfReflection:

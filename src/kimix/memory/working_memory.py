@@ -19,24 +19,23 @@ class WorkingMemory:
 
     def add(self, entry: MemoryEntry) -> None:
         """Add current context (stores a copy with WORKING type, caller's object is untouched)."""
-        # Reconstructing is ~3x faster than copy() or dataclasses.replace()
+        # object.__new__ + direct slot assignment is ~3x faster than
+        # dataclass __init__ reconstruction for a slots=True dataclass,
         # and avoids mutating the caller's entry.
-        self.items.append(
-            MemoryEntry(
-                content=entry.content,
-                memory_type=MemoryType.WORKING,
-                timestamp=entry.timestamp,
-                importance=entry.importance,
-                access_count=entry.access_count,
-                last_accessed=entry.last_accessed,
-                embedding=entry.embedding,
-                tags=entry.tags,
-                source=entry.source,
-                metadata=entry.metadata,
-                expires_at=entry.expires_at,
-                agent_id=entry.agent_id,
-            )
-        )
+        new: MemoryEntry = object.__new__(MemoryEntry)
+        new.content = entry.content
+        new.memory_type = MemoryType.WORKING
+        new.timestamp = entry.timestamp
+        new.importance = entry.importance
+        new.access_count = entry.access_count
+        new.last_accessed = entry.last_accessed
+        new.embedding = entry.embedding
+        new.tags = entry.tags
+        new.source = entry.source
+        new.metadata = entry.metadata
+        new.expires_at = entry.expires_at
+        new.agent_id = entry.agent_id
+        self.items.append(new)
 
     def get_context(self, n: int = 5) -> list[MemoryEntry]:
         """Get recent n context items."""

@@ -290,7 +290,7 @@ class TestSwarmDAGIntegration:
         assert isinstance(result.output, str)
 
     def test_tool_classes_in_all(self) -> None:
-        from my_tools import swarm
+        import kimix.tools.swarm as swarm
         assert hasattr(swarm, "AddNode")
         assert hasattr(swarm, "AddEdge")
         assert hasattr(swarm, "AddNodeParams")

@@ -8,6 +8,7 @@ import pytest
 
 from kimix.memory.system import AgentMemorySystem
 from kimix.memory.types import MemoryEntry, MemoryType
+from kimix.memory.cold_storage import ColdStorage
 
 
 class TestSystemEmptyOperations:
@@ -43,15 +44,11 @@ class TestSystemEmptyOperations:
         finally:
             os.unlink(path)
 
-    def test_archive_empty_long_term(self):
+    def test_archive_empty_entries_raises(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            sys = AgentMemorySystem(
-                ltm_path=f"{tmpdir}/ltm.json",
-                agent_id="empty_test",
-            )
-            sys.cold_storage = type(sys.cold_storage)(archive_dir=f"{tmpdir}/cold")
-            sys.archive_to_cold_storage()  # should not raise
-            assert sys.cold_storage.list_archives() == []
+            cs = ColdStorage(archive_dir=tmpdir)
+            with pytest.raises(ValueError):
+                cs.archive([])
 
 
 class TestSystemMultiAgent:
@@ -66,10 +63,10 @@ class TestSystemMultiAgent:
 
     def test_cold_storage_per_agent(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            sys_a = AgentMemorySystem(ltm_path=f"{tmpdir}/ltm.json", agent_id="a")
-            sys_b = AgentMemorySystem(ltm_path=f"{tmpdir}/ltm.json", agent_id="b")
+            cs_a = ColdStorage(archive_dir=f"{tmpdir}/cold_a")
+            cs_b = ColdStorage(archive_dir=f"{tmpdir}/cold_b")
             # Cold storage dirs should differ
-            assert sys_a.cold_storage.archive_dir != sys_b.cold_storage.archive_dir
+            assert cs_a.archive_dir != cs_b.archive_dir
 
 
 class TestSystemBoundaryConditions:

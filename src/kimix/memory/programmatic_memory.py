@@ -65,15 +65,30 @@ class Workflow:
     tasks: list[Task] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
+    _pending_count: int = field(default=0, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        # Fast count without building a list
+        count = 0
+        for task in self.tasks:
+            if task.status == "pending":
+                count += 1
+        self._pending_count = count
 
     def add_trigger(self, trigger: Trigger) -> None:
         self.triggers.append(trigger)
 
     def add_task(self, task: Task) -> None:
         self.tasks.append(task)
+        if task.status == "pending":
+            self._pending_count += 1
 
     def pending_tasks(self) -> list[Task]:
         return [t for t in self.tasks if t.status == "pending"]
+
+    @property
+    def has_pending(self) -> bool:
+        return self._pending_count > 0
 
     def to_memory_entry(self) -> MemoryEntry:
         return MemoryEntry(
@@ -98,13 +113,16 @@ class ProgrammaticMemory:
         self._event_index: dict[str, dict[str, list[Trigger]]] = {}
         # workflow_name -> [schedule Trigger, ...]
         self._schedule_index: dict[str, list[Trigger]] = {}
+        self._total_tasks: int = 0
 
     def register_workflow(self, workflow: Workflow) -> None:
         """Register or overwrite a workflow."""
         old = self.workflows.get(workflow.name)
         if old is not None:
             self._remove_indices(old)
+            self._total_tasks -= len(old.tasks)
         self.workflows[workflow.name] = workflow
+        self._total_tasks += len(workflow.tasks)
         schedule_triggers: list[Trigger] = []
         for trigger in workflow.triggers:
             if trigger.trigger_type == TriggerType.EVENT:
@@ -120,6 +138,7 @@ class ProgrammaticMemory:
         if wf is None:
             return False
         self._remove_indices(wf)
+        self._total_tasks -= len(wf.tasks)
         return True
 
     def _remove_indices(self, wf: Workflow) -> None:
@@ -143,9 +162,11 @@ class ProgrammaticMemory:
         """
         results: dict[str, list[str]] = {}
         now = time.time()
-        for name, triggers in self._schedule_index.items():
-            wf = self.workflows.get(name)
-            if wf is None or not wf.enabled:
+        workflows = self.workflows
+        schedule_index = self._schedule_index
+        for name, triggers in schedule_index.items():
+            wf = workflows.get(name)
+            if wf is None or not wf.enabled or not wf.has_pending:
                 continue
             fired = False
             for trigger in triggers:
@@ -155,19 +176,27 @@ class ProgrammaticMemory:
             if not fired:
                 continue
             executed: list[str] = []
-            for task in wf.tasks:
-                if task.status != "pending":
-                    continue
-                task.status = "running"
-                if task_runner is not None:
+            pending = wf._pending_count
+            if task_runner is not None:
+                for task in wf.tasks:
+                    if task.status != "pending":
+                        continue
+                    task.status = "running"
                     try:
                         task.result = task_runner(wf, task)
                         task.status = "completed"
                     except Exception:
                         task.status = "failed"
-                else:
+                    executed.append(task.name)
+                    pending -= 1
+            else:
+                for task in wf.tasks:
+                    if task.status != "pending":
+                        continue
                     task.status = "completed"
-                executed.append(task.name)
+                    executed.append(task.name)
+                    pending -= 1
+            wf._pending_count = pending
             if executed:
                 results[name] = executed
         return results
@@ -183,13 +212,15 @@ class ProgrammaticMemory:
         if event_map is None:
             return results
         payload = event_payload or {}
+        workflows = self.workflows
         for wf_name, triggers in event_map.items():
-            wf = self.workflows.get(wf_name)
-            if wf is None or not wf.enabled:
+            wf = workflows.get(wf_name)
+            if wf is None or not wf.enabled or not wf.has_pending:
                 continue
             for trigger in triggers:
                 trigger.mark_fired()
             executed: list[str] = []
+            pending = wf._pending_count
             for task in wf.tasks:
                 if task.status != "pending":
                     continue
@@ -197,6 +228,8 @@ class ProgrammaticMemory:
                 task.result = payload
                 task.status = "completed"
                 executed.append(task.name)
+                pending -= 1
+            wf._pending_count = pending
             if executed:
                 results[wf_name] = executed
         return results
@@ -209,7 +242,6 @@ class ProgrammaticMemory:
         return [wf.to_memory_entry() for wf in self.workflows.values()]
 
     def reflect(self) -> str:
-        total_tasks = sum(len(wf.tasks) for wf in self.workflows.values())
         return (
-            f"Programmatic Memory: {len(self.workflows)} workflows, {total_tasks} tasks"
+            f"Programmatic Memory: {len(self.workflows)} workflows, {self._total_tasks} tasks"
         )

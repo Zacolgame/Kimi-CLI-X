@@ -5,15 +5,19 @@ from __future__ import annotations
 import hashlib
 import heapq
 import json
+import math
 import os
 import time
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Sequence, Set
 
 import numpy as np
 
 from kimix.memory.types import MemoryEntry, MemoryType
 from kimix.memory.embedding import EmbeddingProvider
 from kimix.memory.retrieval import InvertedIndex, NgramTokenizer, Searcher
+
+# Pre-computed decay coefficient (same as in types.py)
+_DECAY_COEFF = -0.1 / 86400.0
 
 
 class LongTermMemory:
@@ -162,6 +166,15 @@ class LongTermMemory:
                 entry = MemoryEntry.from_dict(item)
                 if entry.agent_id != self._agent_id:
                     continue
+                # Normalise list embeddings to unit-norm ndarrays so
+                # retrieve() can skip redundant norm calculations.
+                emb = entry.embedding
+                if isinstance(emb, list):
+                    arr = np.asarray(emb, dtype=np.float32)
+                    norm = float(np.linalg.norm(arr))
+                    if norm:
+                        arr /= norm
+                    entry.embedding = arr
                 entry_id = self._hash(entry.content)
                 self.entries[entry_id] = entry
                 self._update_index(entry_id, entry)
@@ -206,6 +219,48 @@ class LongTermMemory:
         self._insert_entry(entry_id, entry)
         self._save()
         return entry
+
+    def store_many(
+        self,
+        items: Sequence[Dict[str, object]],
+    ) -> List[MemoryEntry]:
+        """Batch-store multiple entries with a single persistence flush.
+
+        Each item in *items* is a dict of kwargs accepted by :meth:`store`.
+        This is **O(N)** total instead of **O(N²)** when calling :meth:`store`
+        in a loop.
+        """
+        results: List[MemoryEntry] = []
+        batch: List[tuple[str, MemoryEntry]] = []
+        embed = self.embedding_provider.embed
+        for item in items:
+            content = str(item["content"])
+            entry = MemoryEntry(
+                content=content,
+                memory_type=item.get("memory_type", MemoryType.SEMANTIC),  # type: ignore[arg-type]
+                importance=float(item.get("importance", 5.0)),
+                tags=list(item.get("tags", []) or []),
+                source=str(item.get("source", "")),
+                metadata=dict(item.get("metadata", {}) or {}),
+                expires_at=item.get("expires_at"),
+                agent_id=self._agent_id,
+            )
+            entry.embedding = embed(content)
+            entry_id = self._hash(content)
+            batch.append((entry_id, entry))
+            results.append(entry)
+
+        if self._backend is not None and batch:
+            self._backend.store_many(batch, dim=self.dim)
+        else:
+            for entry_id, entry in batch:
+                self.entries[entry_id] = entry
+                self._update_index(entry_id, entry)
+            self._dirty = True
+
+        self._invalidate_bm25()
+        self._save()
+        return results
 
     def retrieve(
         self,
@@ -272,6 +327,8 @@ class LongTermMemory:
         if not candidates or top_k <= 0:
             return []
 
+        n_cand = len(candidates)
+
         # Batch-embed missing vectors
         missing = [entry for entry in candidates if entry.embedding is None]
         if missing:
@@ -281,32 +338,44 @@ class LongTermMemory:
                 entry.embedding = vec
 
         # Vectorised semantic similarity
-        embeddings = np.array([entry.embedding for entry in candidates], dtype=np.float32)
+        # Use np.stack when all embeddings are already ndarrays (common case)
+        try:
+            embeddings = np.stack([entry.embedding for entry in candidates])
+        except (TypeError, ValueError):
+            embeddings = np.array([entry.embedding for entry in candidates], dtype=np.float32)
+
         query_arr = np.asarray(query_vec, dtype=np.float32)
-        q_norm = np.linalg.norm(query_arr)
-        norms = np.linalg.norm(embeddings, axis=1)
+        q_norm = float(np.linalg.norm(query_arr))
         if q_norm == 0:
-            semantic_arr = np.zeros(len(candidates), dtype=np.float64)
+            semantic_arr = np.zeros(n_cand, dtype=np.float64)
         else:
             dots = embeddings @ query_arr
+            norms = np.linalg.norm(embeddings, axis=1)
             with np.errstate(divide="ignore", invalid="ignore"):
                 sims = np.where(norms == 0, 0.0, dots / (norms * q_norm))
-            eff = np.array([entry.get_effective_importance(now) for entry in candidates], dtype=np.float64)
+
+            # Vectorised effective importance
+            timestamps = np.empty(n_cand, dtype=np.float64)
+            access_counts = np.empty(n_cand, dtype=np.float64)
+            importances = np.empty(n_cand, dtype=np.float64)
+            for i, entry in enumerate(candidates):
+                timestamps[i] = entry.timestamp
+                access_counts[i] = entry.access_count
+                importances[i] = entry.importance
+            recency = np.exp(_DECAY_COEFF * (now - timestamps))
+            access_boost = np.minimum(access_counts * 0.1, 2.0)
+            eff = importances * recency * (1.0 + access_boost)
             semantic_arr = sims.astype(np.float64) * eff
 
         # BM25 scores (single-pass min-max normalisation)
-        bm25_arr = np.zeros(len(candidates), dtype=np.float64)
+        bm25_arr = np.zeros(n_cand, dtype=np.float64)
         if use_hybrid:
             searcher = self._ensure_bm25()
-            bm25_results = searcher.search(query, top_k=len(candidates))
+            bm25_results = searcher.search(query, top_k=n_cand)
             if bm25_results:
-                max_bm25 = bm25_results[0][1]
-                min_bm25 = max_bm25
-                for _, score in bm25_results[1:]:
-                    if score > max_bm25:
-                        max_bm25 = score
-                    elif score < min_bm25:
-                        min_bm25 = score
+                scores = [score for _, score in bm25_results]
+                max_bm25 = max(scores)
+                min_bm25 = min(scores)
                 bm25_range = max_bm25 - min_bm25 if max_bm25 != min_bm25 else 1.0
                 eid_to_idx = {eid: i for i, eid in enumerate(candidate_ids)}
                 doc_to_eid = self._bm25_doc_to_entry_id
@@ -317,8 +386,7 @@ class LongTermMemory:
 
         # Hybrid fusion (vectorised)
         final = (1.0 - bm25_weight) * semantic_arr + bm25_weight * bm25_arr
-        n = len(final)
-        if top_k * 4 < n:
+        if top_k * 4 < n_cand:
             top_indices = np.argpartition(final, -top_k)[-top_k:]
             top_indices = top_indices[np.argsort(final[top_indices])[::-1]]
         else:
@@ -407,6 +475,47 @@ class LongTermMemory:
         self._dirty = True
         self._invalidate_bm25()
         self._save()
+
+    def forget_many(self, entry_ids: Sequence[str]) -> None:
+        """Batch-active forgetting with a single persistence flush.
+
+        Each entry has its importance halved; entries falling below 0.1 are
+        deleted.  This is **O(N)** total persistence work instead of
+        **O(N²)** when calling :meth:`forget` in a loop.
+        """
+        if self._backend is not None:
+            for entry_id in entry_ids:
+                entry = self._backend.get(entry_id, dim=self.dim)
+                if entry is None:
+                    continue
+                entry.importance *= 0.5
+                if entry.importance < 0.1:
+                    self._backend.delete(entry_id)
+                else:
+                    self._backend.store(entry, entry_id, dim=self.dim)
+            self._invalidate_bm25()
+            return
+
+        changed = False
+        for entry_id in entry_ids:
+            entry = self.entries.get(entry_id)
+            if entry is None:
+                continue
+            entry.importance *= 0.5
+            if entry.importance < 0.1:
+                del self.entries[entry_id]
+                for tag in entry.tags:
+                    tag_set = self.index.get(tag)
+                    if tag_set is not None:
+                        tag_set.discard(entry_id)
+                        if not tag_set:
+                            del self.index[tag]
+            changed = True
+
+        if changed:
+            self._dirty = True
+            self._invalidate_bm25()
+            self._save()
 
     def count(self) -> int:
         if self._backend is not None:

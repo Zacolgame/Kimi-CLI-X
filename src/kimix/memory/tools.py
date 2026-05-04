@@ -31,7 +31,10 @@ async def _get_memory_system() -> AgentMemorySystem:
 
 def _run_sync(func: Callable[..., T], *args: Any, **kwargs: Any) -> Awaitable[T]:
     """Run a synchronous function in the default thread pool to avoid blocking the event loop."""
-    return asyncio.get_running_loop().run_in_executor(None, partial(func, *args, **kwargs))
+    loop = asyncio.get_running_loop()
+    if kwargs:
+        return loop.run_in_executor(None, partial(func, *args, **kwargs))
+    return loop.run_in_executor(None, func, *args)
 
 
 class RememberParams(BaseModel):
@@ -56,20 +59,21 @@ class Remember(CallableTool2):
             if params.long_term:
                 entry = await _run_sync(
                     memory.remember,
-                    fact=params.content,
-                    importance=params.importance,
-                    tags=params.tags,
-                    memory_type=params.memory_type,
-                    expires_at=params.expires_at,
+                    params.content,
+                    params.importance,
+                    params.tags,
+                    params.memory_type,
+                    params.expires_at,
                 )
                 return ToolOk(output=f"Remembered: {entry.content[:100]}... (importance: {entry.importance})")
             else:
                 entry = await _run_sync(
                     memory.perceive,
-                    observation=params.content,
-                    importance=params.importance,
-                    tags=params.tags,
-                    expires_at=params.expires_at,
+                    params.content,
+                    params.importance,
+                    params.tags,
+                    "environment",
+                    params.expires_at,
                 )
                 return ToolOk(output=f"Perceived: {entry.content[:100]}... (importance: {entry.importance})")
         except Exception as e:
@@ -97,20 +101,22 @@ class Recall(CallableTool2):
             memory = await _get_memory_system()
             results = await _run_sync(
                 memory.recall,
-                query=params.query,
-                context_size=params.context_size,
-                use_working=params.use_working,
-                use_short=params.use_short,
-                use_long=params.use_long,
-                tag_filter=params.tags or None,
+                params.query,
+                params.context_size,
+                params.use_working,
+                params.use_short,
+                params.use_long,
+                params.tags or None,
             )
             output_parts: list[str] = []
-            append = output_parts.append
-            for tier, entries in results.items():
-                if entries:
-                    append(f"\n=== {tier.upper()} ===")
-                    for e in entries:
-                        append(f"- [{e.memory_type.value}] {e.content}")
+            for tier in ("working", "short_term", "long_term"):
+                entries = results[tier]
+                if not entries:
+                    continue
+                output_parts.append(f"\n=== {tier.upper()} ===")
+                output_parts.extend(
+                    f"- [{e.memory_type.value}] {e.content}" for e in entries
+                )
             output = "\n".join(output_parts) if output_parts else "No memories found."
             return ToolOk(output=output)
         except Exception as e:
@@ -132,7 +138,7 @@ class GetContext(CallableTool2):
     async def __call__(self, params: GetContextParams) -> ToolReturnValue:
         try:
             memory = await _get_memory_system()
-            context = await _run_sync(memory.get_context_for_llm, params.query, max_tokens=params.max_tokens)
+            context = await _run_sync(memory.get_context_for_llm, params.query, params.max_tokens)
             return ToolOk(output=context)
         except Exception as e:
             return ToolError(message=str(e), output="", brief="Failed to generate context")
@@ -153,9 +159,11 @@ class Reflect(CallableTool2):
         try:
             memory = await _get_memory_system()
             if params.deep:
-                report = await _run_sync(memory.self_reflect)
+                # self_reflect() is lightweight in-memory iteration; avoid thread-pool overhead
+                report = memory.self_reflect()
             else:
-                report = await _run_sync(memory.reflect)
+                # reflect() is lightweight string formatting; avoid thread-pool overhead
+                report = memory.reflect()
             return ToolOk(output=report)
         except Exception as e:
             return ToolError(message=str(e), output="", brief="Failed to reflect on memory")
