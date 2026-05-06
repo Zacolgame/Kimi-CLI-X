@@ -16,7 +16,7 @@ class SubAgentParams(BaseModel):
     )
     run_in_background: bool = Field(
         default=False,
-        description="Run in an independent background process. Returns immediately with a task_id. Use TaskList, TaskOutput to manage."
+        description="Run in an independent background process. Returns immediately with a task_id. Use TaskOutput to manage."
     )
 
 
@@ -136,7 +136,7 @@ class Agent(CallableTool2):
             add_task(self._session, task_id, stream)
 
             return ToolOk(
-                output=f"Sub-agent started in background.\nTask ID: {task_id}\n\nUse 'TaskList' to view all tasks, 'TaskOutput' to get output."
+                output=f"Sub-agent started in background.\nTask ID: {task_id}\n\nUse 'TaskOutput' to get output."
             )
 
         except Exception as exc:

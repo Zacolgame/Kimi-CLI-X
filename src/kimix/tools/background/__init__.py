@@ -10,47 +10,11 @@ from .utils import generate_task_id, remove_task_id, add_task, get_all_tasks, Ba
 from kimix.tools.common import _maybe_export_output_async, _export_to_temp_file_async
 
 
-class TaskListParams(BaseModel):
-    """Parameters for TaskList tool."""
-    pass
-
-
-class TaskList(CallableTool2):
-    """List all background tasks."""
-    name: str = "TaskList"
-    description: str = "List background tasks."
-    params: type[BaseModel] = TaskListParams
-
-    def __init__(self, session: Session):
-        super().__init__()
-        self._session = session
-
-    async def __call__(self, params: TaskListParams) -> ToolReturnValue:
-        """Return formatted info of all tasks."""
-        try:
-            tasks = get_all_tasks(self._session)
-            if not tasks:
-                return ToolOk(output="No background tasks running.")
-
-            lines = []
-            for task_id, stream in tasks.items():
-                status = await stream.is_started()
-                if status:
-                    lines.append(task_id)
-
-            return ToolOk(output="\n".join(lines))
-        except Exception as e:
-            return ToolError(
-                message=str(e),
-                output="Failed to retrieve task list",
-                brief="Task list error"
-            )
-
-
 class TaskOutputParams(BaseModel):
     """Parameters for TaskOutput."""
-    task_id: str = Field(
-        description="Task ID to get output from."
+    task_id: str | None = Field(
+        default=None,
+        description="Task ID to get output from. If None, list all tasks."
     )
     block: bool = Field(
         default=True,
@@ -73,9 +37,9 @@ class TaskOutputParams(BaseModel):
 
 
 class TaskOutput(CallableTool2):
-    """Get output from a background task."""
+    """Get output from a background task, or list all tasks if no task_id is provided."""
     name: str = "TaskOutput"
-    description: str = "Get background task output."
+    description: str = "Get background task output or list tasks."
     params: type[BaseModel] = TaskOutputParams
 
     def __del__(self):
@@ -97,11 +61,23 @@ class TaskOutput(CallableTool2):
         self._session = session
 
     async def __call__(self, params: TaskOutputParams) -> ToolReturnValue:
-        """Return the output of a task_id."""
+        """Return the output of a task_id, or list all tasks if task_id is None."""
         try:
             tasks = get_all_tasks(self._session)
-            stream: BackgroundStream | None = None
-            stream = tasks.get(params.task_id.strip())
+
+            if params.task_id is None:
+                if not tasks:
+                    return ToolOk(output="No background tasks running.")
+
+                lines = []
+                for task_id, stream in tasks.items():
+                    status = await stream.is_started()
+                    if status:
+                        lines.append(task_id)
+
+                return ToolOk(output="\n".join(lines))
+
+            stream: BackgroundStream | None = tasks.get(params.task_id.strip())
             if stream is None:
                 return ToolError(
                     message=f"Task '{params.task_id}' not found",
@@ -140,8 +116,6 @@ class TaskOutput(CallableTool2):
 
 __all__ = [
     # Tool classes
-    "TaskList",
-    "TaskListParams",
     "TaskOutput",
     "TaskOutputParams",
     # Utility functions

@@ -43,7 +43,7 @@ def get_system_prompt(
                 role_doc = 'You are a terse ' + ('sub-agent' if is_sub_agent else 'coder')
                 items.append(
                     'For long tasks, use `Run`/`Python` with `run_in_background=true`, then manage via '
-                    '`TaskList`, `TaskOutput`, `Input`. Return control immediately after starting.'
+                    '`TaskOutput`, `Input`. Return control immediately after starting.'
                 )
                 items.append(
                     'For complex or multi-step tasks, use `SetTodoList` to track progress.'

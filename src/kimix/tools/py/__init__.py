@@ -27,7 +27,7 @@ class Params(BaseModel):
     )
     run_in_background: bool = Field(
         default=False,
-        description="Run in an independent background process. Returns immediately with a task_id. Use TaskList, TaskOutput to manage."
+        description="Run in an independent background process. Returns immediately with a task_id. Use TaskOutput to manage."
     )
 
 
@@ -109,7 +109,7 @@ class Python(CallableTool2[Params]):
 
             # Return success with task_id
             return ToolOk(
-                output=f"Python process started in background.\nTask ID: {task_id}\n\nUse 'TaskList' to view all tasks, 'TaskOutput' to get output, 'Input' to input to process."
+                output=f"Python process started in background.\nTask ID: {task_id}\n\nUse 'TaskOutput' to get output, 'Input' to input to process."
             )
 
         except Exception as exc:

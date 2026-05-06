@@ -6,7 +6,6 @@ agent:
     - "kimix.tools.py:Python"
     - "kimix.tools.file.input:Input"
     - "kimix.tools.background:TaskOutput"
-    - "kimix.tools.background:TaskList"
     - "kimix.tools.skill:SkillSearch"
     - "kimi_cli.tools.todo:SetTodoList"
     - "kimi_cli.tools.file:WriteFile"

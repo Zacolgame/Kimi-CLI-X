@@ -28,7 +28,7 @@ from kimix.tools.background.utils import (
     get_all_tasks,
     remove_task_id,
 )
-from kimix.tools.background import TaskList, TaskOutput, TaskListParams, TaskOutputParams
+from kimix.tools.background import TaskOutput, TaskOutputParams
 from kimix.tools.file.run import Run, RunParams
 from kimix.tools.py import Python, Params as PyParams
 from kimix.tools.file.input import Input, InputParams
@@ -537,34 +537,38 @@ class TestAgentToolAsync:
         mock_start.assert_awaited_once()
         mock_add_task.assert_called_once()
 
-    async def test_nested_subagent_rejected_in_background(self, mock_session: MagicMock) -> None:
+    async def test_nested_subagent_allowed_in_background(self, mock_session: MagicMock) -> None:
         from kimix.tools.agent import Agent, SubAgentParams
 
         agent = Agent(session=mock_session)
         params = SubAgentParams(prompt="nested", run_in_background=True)
         mock_session.custom_data["sub_agent_active"] = True
         try:
-            result = await agent(params)
-            assert isinstance(result, ToolError)
-            assert "cannot be called within this scope" in str(result.message)
+            with patch("kimix.tools.agent.add_task") as mock_add_task, \
+                 patch.object(BackgroundStream, "start", return_value=None) as mock_start:
+                result = await agent(params)
+            assert isinstance(result, ToolOk)
+            assert "Task ID" in str(result.output)
+            mock_start.assert_awaited_once()
+            mock_add_task.assert_called_once()
         finally:
             mock_session.custom_data["sub_agent_active"] = False
 
 
 # ---------------------------------------------------------------------------
-# TaskList async patterns
+# TaskList async patterns (via TaskOutput with task_id=None)
 # ---------------------------------------------------------------------------
 class TestTaskListAsync:
-    """Verify TaskList tool async patterns."""
+    """Verify TaskList tool async patterns via TaskOutput."""
 
     async def test_empty_task_list(self, mock_session: MagicMock) -> None:
-        tool = TaskList(session=mock_session)
-        result = await tool(TaskListParams())
+        tool = TaskOutput(session=mock_session)
+        result = await tool(TaskOutputParams(task_id=None))
         assert isinstance(result, ToolOk)
         assert "No background tasks running" in str(result.output)
 
     async def test_task_list_shows_started_tasks(self, mock_session: MagicMock) -> None:
-        tool = TaskList(session=mock_session)
+        tool = TaskOutput(session=mock_session)
         stream = BackgroundStream()
 
         def worker(q: queue.Queue[str]) -> None:
@@ -572,7 +576,7 @@ class TestTaskListAsync:
 
         await stream.start(worker, stop_function=lambda: None)
         add_task(mock_session, "run_test", stream)
-        result = await tool(TaskListParams())
+        result = await tool(TaskOutputParams(task_id=None))
         await stream.wait()
         assert "run_test" in str(result.output)
 

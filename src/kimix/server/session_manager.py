@@ -28,6 +28,7 @@ from kimix.utils import (
     _create_session_async,
     close_session_async,
 )
+from kimi_cli.session_state import load_session_state
 
 logger = logging.getLogger(__name__)
 
@@ -554,236 +555,262 @@ class SessionManager:
                     )
                     return asst_msg.to_dict()
 
-            async for wire_msg in sdk_session.prompt(text, merge_wire_messages=True):
-                # ── ApprovalRequest: auto-approve in server mode ─
-                if isinstance(wire_msg, ApprovalRequest):
-                    logger.info(
-                        "[SessionManager] Auto-approving: %s (%s)",
-                        wire_msg.action,
-                        wire_msg.description,
-                    )
-                    wire_msg.resolve("approve")
-                    continue
+            ralph_count = 0
+            try:
+                ralph_count = sdk_session._cli._runtime.config.loop_control.max_ralph_iterations or 0
+            except AttributeError:
+                pass
 
-                # ── StepBegin: new step boundary ─────────────────
-                if isinstance(wire_msg, StepBegin):
-                    _flush_reasoning()
-                    _flush_text()
-                    _emit_step_finish("tool-calls")
+            if ralph_count < 0:
+                loop_iter = iter(int, 1)
+            elif ralph_count > 0:
+                loop_iter = range(ralph_count + 1)
+            else:
+                loop_iter = range(1)
 
-                    # Inter-step events
-                    asst_msg.info.time["completed"] = _now_ms()
-                    bus.emit_type(
-                        "message.updated",
-                        sessionID=session_id,
-                        info=asst_msg.info.to_dict(),
-                    )
-                    bus.emit_type(
-                        "session.status",
-                        sessionID=session_id,
-                        status={"type": "busy", "time": time.time()},
-                    )
-
-                    # New step
-                    step_snapshot = _snapshot_hash()
-                    _emit_part(
-                        MessagePart(
-                            id=_gen_part_id(),
-                            type="step-start",
-                            sessionID=session_id,
-                            messageID=asst_msg_id,
-                            snapshot=step_snapshot,
+            for _ in loop_iter:
+                if entry._cancel_event is not None and entry._cancel_event.is_set():
+                    break
+                async for wire_msg in sdk_session.prompt(text, merge_wire_messages=True):
+                    # ── ApprovalRequest: auto-approve in server mode ─
+                    if isinstance(wire_msg, ApprovalRequest):
+                        logger.info(
+                            "[SessionManager] Auto-approving: %s (%s)",
+                            wire_msg.action,
+                            wire_msg.description,
                         )
-                    )
-                    step_finish_reason = "stop"
-                    continue
+                        wire_msg.resolve("approve")
+                        continue
 
-                # ── StepInterrupted ──────────────────────────────
-                if isinstance(wire_msg, StepInterrupted):
-                    step_finish_reason = "tool-calls"
-                    continue
+                    # ── StepBegin: new step boundary ─────────────────
+                    if isinstance(wire_msg, StepBegin):
+                        _flush_reasoning()
+                        _flush_text()
+                        _emit_step_finish("tool-calls")
 
-                # ── ThinkPart (reasoning) — cumulative ───────────
-                if isinstance(wire_msg, ThinkPart):
-                    chunk = wire_msg.think
-                    if chunk:
-                        if reasoning_time_start is None:
-                            reasoning_time_start = _now_ms()
-                        reasoning_buf.append(chunk)
-                        full_so_far = "".join(reasoning_buf)
+                        # Inter-step events
+                        asst_msg.info.time["completed"] = _now_ms()
+                        bus.emit_type(
+                            "message.updated",
+                            sessionID=session_id,
+                            info=asst_msg.info.to_dict(),
+                        )
+                        bus.emit_type(
+                            "session.status",
+                            sessionID=session_id,
+                            status={"type": "busy", "time": time.time()},
+                        )
+
+                        # New step
+                        step_snapshot = _snapshot_hash()
                         _emit_part(
                             MessagePart(
-                                id=reasoning_part_id,
-                                type="reasoning",
-                                text=full_so_far,
+                                id=_gen_part_id(),
+                                type="step-start",
                                 sessionID=session_id,
                                 messageID=asst_msg_id,
-                                time={"start": reasoning_time_start},
-                            ),
-                            delta=chunk,
+                                snapshot=step_snapshot,
+                            )
                         )
-                    continue
+                        step_finish_reason = "stop"
+                        continue
 
-                # ── TextPart — cumulative ────────────────────────
-                if isinstance(wire_msg, TextPart):
-                    chunk = wire_msg.text
-                    if chunk:
-                        # Flush reasoning first if we're switching to text
+                    # ── StepInterrupted ──────────────────────────────
+                    if isinstance(wire_msg, StepInterrupted):
+                        step_finish_reason = "tool-calls"
+                        continue
+
+                    # ── ThinkPart (reasoning) — cumulative ───────────
+                    if isinstance(wire_msg, ThinkPart):
+                        chunk = wire_msg.think
+                        if chunk:
+                            if reasoning_time_start is None:
+                                reasoning_time_start = _now_ms()
+                            reasoning_buf.append(chunk)
+                            full_so_far = "".join(reasoning_buf)
+                            _emit_part(
+                                MessagePart(
+                                    id=reasoning_part_id,
+                                    type="reasoning",
+                                    text=full_so_far,
+                                    sessionID=session_id,
+                                    messageID=asst_msg_id,
+                                    time={"start": reasoning_time_start},
+                                ),
+                                delta=chunk,
+                            )
+                        continue
+
+                    # ── TextPart — cumulative ────────────────────────
+                    if isinstance(wire_msg, TextPart):
+                        chunk = wire_msg.text
+                        if chunk:
+                            # Flush reasoning first if we're switching to text
+                            if reasoning_buf:
+                                _flush_reasoning()
+
+                            if text_time_start is None:
+                                text_time_start = _now_ms()
+                            text_buf.append(chunk)
+                            full_so_far = "".join(text_buf)
+                            _emit_part(
+                                MessagePart(
+                                    id=text_part_id,
+                                    type="text",
+                                    text=full_so_far,
+                                    sessionID=session_id,
+                                    messageID=asst_msg_id,
+                                    time={"start": text_time_start},
+                                ),
+                                delta=chunk,
+                            )
+                        continue
+
+                    # ── ToolCall: pending → running ──────────────────
+                    if isinstance(wire_msg, ToolCall):
+                        # Flush reasoning before tool calls
                         if reasoning_buf:
                             _flush_reasoning()
 
-                        if text_time_start is None:
-                            text_time_start = _now_ms()
-                        text_buf.append(chunk)
-                        full_so_far = "".join(text_buf)
+                        tool_name = (
+                            wire_msg.function.name if wire_msg.function else "unknown"
+                        )
+                        tool_args_raw = (
+                            wire_msg.function.arguments if wire_msg.function else ""
+                        )
+                        wire_tc_id = wire_msg.id or _gen_id("toolu")
+                        tool_part_id = _gen_part_id()
+                        active_tool_parts[wire_tc_id] = (tool_part_id, tool_name)
+
+                        # Phase 1: pending
                         _emit_part(
                             MessagePart(
-                                id=text_part_id,
-                                type="text",
-                                text=full_so_far,
+                                id=tool_part_id,
+                                type="tool",
+                                tool=tool_name,
+                                callID=wire_tc_id,
                                 sessionID=session_id,
                                 messageID=asst_msg_id,
-                                time={"start": text_time_start},
-                            ),
-                            delta=chunk,
+                                state={
+                                    "status": "pending",
+                                    "input": {},
+                                    "raw": "",
+                                },
+                            )
                         )
-                    continue
 
-                # ── ToolCall: pending → running ──────────────────
-                if isinstance(wire_msg, ToolCall):
-                    # Flush reasoning before tool calls
-                    if reasoning_buf:
-                        _flush_reasoning()
+                        # Phase 2: running (parse input args)
+                        parsed_input: Any = {}
+                        if tool_args_raw:
+                            try:
+                                parsed_input = json.loads(tool_args_raw)
+                            except (json.JSONDecodeError, TypeError):
+                                parsed_input = {"raw": str(tool_args_raw)}
 
-                    tool_name = (
-                        wire_msg.function.name if wire_msg.function else "unknown"
-                    )
-                    tool_args_raw = (
-                        wire_msg.function.arguments if wire_msg.function else ""
-                    )
-                    wire_tc_id = wire_msg.id or _gen_id("toolu")
-                    tool_part_id = _gen_part_id()
-                    active_tool_parts[wire_tc_id] = (tool_part_id, tool_name)
-
-                    # Phase 1: pending
-                    _emit_part(
-                        MessagePart(
-                            id=tool_part_id,
-                            type="tool",
-                            tool=tool_name,
-                            callID=wire_tc_id,
-                            sessionID=session_id,
-                            messageID=asst_msg_id,
-                            state={
-                                "status": "pending",
-                                "input": {},
-                                "raw": "",
-                            },
+                        _emit_part(
+                            MessagePart(
+                                id=tool_part_id,
+                                type="tool",
+                                tool=tool_name,
+                                callID=wire_tc_id,
+                                sessionID=session_id,
+                                messageID=asst_msg_id,
+                                state={
+                                    "status": "running",
+                                    "input": parsed_input,
+                                    "time": {"start": _now_ms()},
+                                },
+                            )
                         )
-                    )
+                        continue
 
-                    # Phase 2: running (parse input args)
-                    parsed_input: Any = {}
-                    if tool_args_raw:
+                    # ── ToolCallPart: streaming argument chunks ──────
+                    if isinstance(wire_msg, ToolCallPart):
+                        # Incremental argument chunk — we already emitted running
+                        continue
+
+                    # ── ToolResult: completed / error ────────────────
+                    if isinstance(wire_msg, ToolResult):
+                        tc_id = wire_msg.tool_call_id
+                        tool_part_id, tool_name = active_tool_parts.pop(
+                            tc_id, (_gen_part_id(), "")
+                        )
+                        rv = wire_msg.return_value
+                        is_error = rv.is_error
+
+                        # Extract output text
+                        output = ""
+                        if isinstance(rv.output, str):
+                            output = rv.output
+                        elif isinstance(rv.output, list):
+                            parts_text = []
+                            for cp in rv.output:
+                                if isinstance(cp, TextPart):
+                                    parts_text.append(cp.text)
+                                else:
+                                    parts_text.append(f"[{type(cp).__name__}]")
+                            output = "".join(parts_text)
+                        if not output and rv.message:
+                            output = rv.message
+
+                        status = "error" if is_error else "completed"
+                        state: Dict[str, Any] = {
+                            "status": status,
+                            "input": {},  # input was already sent in running phase
+                        }
+                        if is_error:
+                            state["error"] = rv.message or output[:4000]
+                        else:
+                            state["output"] = output[:4000]
+
+                        _emit_part(
+                            MessagePart(
+                                id=tool_part_id,
+                                type="tool",
+                                tool=tool_name,
+                                callID=tc_id,
+                                sessionID=session_id,
+                                messageID=asst_msg_id,
+                                state=state,
+                            )
+                        )
+                        continue
+
+                    # ── Other ContentPart subtypes (images etc.) ─────
+                    if isinstance(wire_msg, ContentPart):
                         try:
-                            parsed_input = json.loads(tool_args_raw)
-                        except (json.JSONDecodeError, TypeError):
-                            parsed_input = {"raw": str(tool_args_raw)}
+                            raw = wire_msg.model_dump()
+                            part_type_str = raw.get("type", "unknown")
+                            part_text = json.dumps(raw, ensure_ascii=False)
+                            if text_time_start is None:
+                                text_time_start = _now_ms()
+                            text_buf.append(f"[{part_type_str}] {part_text}")
+                            full_so_far = "".join(text_buf)
+                            _emit_part(
+                                MessagePart(
+                                    id=text_part_id,
+                                    type="text",
+                                    text=full_so_far,
+                                    sessionID=session_id,
+                                    messageID=asst_msg_id,
+                                    time={"start": text_time_start},
+                                ),
+                                delta=part_text,
+                            )
+                        except Exception:
+                            pass
+                        continue
 
-                    _emit_part(
-                        MessagePart(
-                            id=tool_part_id,
-                            type="tool",
-                            tool=tool_name,
-                            callID=wire_tc_id,
-                            sessionID=session_id,
-                            messageID=asst_msg_id,
-                            state={
-                                "status": "running",
-                                "input": parsed_input,
-                                "time": {"start": _now_ms()},
-                            },
-                        )
-                    )
-                    continue
+                    if ralph_count != 0:
+                        todos = []
+                        try:
+                            if hasattr(sdk_session, '_cli') and sdk_session._cli is not None and sdk_session._cli.session is not None:
+                                todos = load_session_state(sdk_session._cli.session.dir).todos
+                        except Exception:
+                            pass
 
-                # ── ToolCallPart: streaming argument chunks ──────
-                if isinstance(wire_msg, ToolCallPart):
-                    # Incremental argument chunk — we already emitted running
-                    continue
-
-                # ── ToolResult: completed / error ────────────────
-                if isinstance(wire_msg, ToolResult):
-                    tc_id = wire_msg.tool_call_id
-                    tool_part_id, tool_name = active_tool_parts.pop(
-                        tc_id, (_gen_part_id(), "")
-                    )
-                    rv = wire_msg.return_value
-                    is_error = rv.is_error
-
-                    # Extract output text
-                    output = ""
-                    if isinstance(rv.output, str):
-                        output = rv.output
-                    elif isinstance(rv.output, list):
-                        parts_text = []
-                        for cp in rv.output:
-                            if isinstance(cp, TextPart):
-                                parts_text.append(cp.text)
-                            else:
-                                parts_text.append(f"[{type(cp).__name__}]")
-                        output = "".join(parts_text)
-                    if not output and rv.message:
-                        output = rv.message
-
-                    status = "error" if is_error else "completed"
-                    state: Dict[str, Any] = {
-                        "status": status,
-                        "input": {},  # input was already sent in running phase
-                    }
-                    if is_error:
-                        state["error"] = rv.message or output[:4000]
-                    else:
-                        state["output"] = output[:4000]
-
-                    _emit_part(
-                        MessagePart(
-                            id=tool_part_id,
-                            type="tool",
-                            tool=tool_name,
-                            callID=tc_id,
-                            sessionID=session_id,
-                            messageID=asst_msg_id,
-                            state=state,
-                        )
-                    )
-                    continue
-
-                # ── Other ContentPart subtypes (images etc.) ─────
-                if isinstance(wire_msg, ContentPart):
-                    try:
-                        raw = wire_msg.model_dump()
-                        part_type_str = raw.get("type", "unknown")
-                        part_text = json.dumps(raw, ensure_ascii=False)
-                        if text_time_start is None:
-                            text_time_start = _now_ms()
-                        text_buf.append(f"[{part_type_str}] {part_text}")
-                        full_so_far = "".join(text_buf)
-                        _emit_part(
-                            MessagePart(
-                                id=text_part_id,
-                                type="text",
-                                text=full_so_far,
-                                sessionID=session_id,
-                                messageID=asst_msg_id,
-                                time={"start": text_time_start},
-                            ),
-                            delta=part_text,
-                        )
-                    except Exception:
-                        pass
-                    continue
-
+                        if not todos or all(todo.status == 'done' for todo in todos):
+                            break
         except asyncio.CancelledError:
             error_msg = "cancelled"
         except Exception as exc:

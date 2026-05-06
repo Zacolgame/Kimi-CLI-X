@@ -18,8 +18,9 @@ async def fix_error_async(
     for i in range(max_loop):
         result = await run_process_with_error_async(
             command, keycode, skip_success=skip_success)
-        if i == 0 and result is None:
-            print_success('No error.')
+        if result is None:
+            if i == 0:
+                print_success('No error.')
             return True
         error_keyword = None
         for k in keycode:

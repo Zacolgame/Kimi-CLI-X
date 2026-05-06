@@ -240,7 +240,6 @@ The `kimix.tools/background/` module provides tools for managing background task
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `TaskList` | List all background tasks with their status | None |
 | `TaskOutput` | Get accumulated output from a background task | `task_id: str` |
 
 ### Utility Classes and Functions

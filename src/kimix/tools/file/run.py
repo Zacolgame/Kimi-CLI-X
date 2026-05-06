@@ -79,7 +79,7 @@ class RunParams(BaseModel):
     )
     run_in_background: bool = Field(
         default=False,
-        description="Run in an independent background process. Returns immediately with a task_id. Use TaskList, TaskOutput. ALWAYS set to True with input detection use `Input` tool."
+        description="Run in an independent background process. Returns immediately with a task_id. Use TaskOutput. ALWAYS set to True with input detection use `Input` tool."
     )
 
 class Run(CallableTool2[RunParams]):
@@ -118,14 +118,14 @@ class Run(CallableTool2[RunParams]):
 
         if params.run_in_background:
             return ToolOk(
-                output=f"Process started in background.\nTask ID: {task_id}\n\nUse 'TaskList' to view all tasks, 'TaskOutput' to get output, 'Input' to input to process"
+                output=f"Process started in background.\nTask ID: {task_id}\n\nUse 'TaskOutput' to get output, 'Input' to input to process"
             )
 
         await stream.wait(params.timeout)
 
         if await stream.thread_is_alive():
             return ToolError(
-                output=f'Running in background. task_id: `{task_id}`. use `TaskOutput` or `TaskList` tool',
+                output=f'Running in background. task_id: `{task_id}`. use `TaskOutput` tool',
                 message="Process timeout",
                 brief="Timeout"
             )
@@ -166,7 +166,7 @@ class Run(CallableTool2[RunParams]):
             
             if await task.thread_is_alive():
                 return ToolError(
-                    output=f'Running in background. task_id: `{task_id}`. use `TaskOutput` or `TaskList` tool',
+                    output=f'Running in background. task_id: `{task_id}`. use `TaskOutput` tool',
                     message="Process timeout",
                     brief="Timeout"
                 )
@@ -215,7 +215,7 @@ class Run(CallableTool2[RunParams]):
 
             # Return success with task_id
             return ToolOk(
-                output=f"Process started in background.\nTask ID: {task_id}\n\nUse 'TaskList' to view all tasks, 'TaskOutput' to get output, 'Input' to input to process"
+                output=f"Process started in background.\nTask ID: {task_id}\n\nUse 'TaskOutput' to get output, 'Input' to input to process"
             )
 
         except Exception as exc:
