@@ -23,7 +23,7 @@ async def _get_memory_system() -> AgentMemorySystem:
     if _memory_system is None:
         async with _init_lock:
             if _memory_system is None:
-                _memory_system = AgentMemorySystem()
+                _memory_system = AgentMemorySystem(use_sqlite=True)
     return _memory_system
 
 
