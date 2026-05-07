@@ -40,11 +40,20 @@ async def _fetch_html(url: str, user_agent: str, viewport: dict, wait_until: str
                 await page.goto(url, wait_until=wait_until, timeout=60000)
             except PWTimeoutError:
                 # If networkidle times out, the DOM is usually ready enough.
+                # But if the page never loaded at all, bail out so the caller
+                # can try the HTTP fallback instead of returning empty HTML.
+                if page.url == "about:blank" and not url.lower().startswith("about:"):
+                    raise RuntimeError(
+                        f"Browser navigation timed out without loading {url}"
+                    )
                 pass
             await page.wait_for_timeout(2000)
             html = await page.content()
         finally:
-            await browser.close()
+            try:
+                await browser.close()
+            except Exception:
+                pass
     return html
 
 
@@ -58,11 +67,17 @@ async def _fetch_html_http(url: str, user_agent: str) -> str:
         response = await loop.run_in_executor(
             None, lambda: urllib.request.urlopen(req, timeout=30)
         )
+    except urllib.error.HTTPError as exc:
+        # HTTP errors (4xx/5xx) still have a response body; read it like Playwright does.
+        response = exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"HTTP fallback failed for {url}: {exc}") from exc
     charset = response.headers.get_content_charset("utf-8")
     data = await loop.run_in_executor(None, response.read)
-    return data.decode(charset, errors="replace")
+    try:
+        return data.decode(charset, errors="replace")
+    except LookupError:
+        return data.decode("utf-8", errors="replace")
 
 
 def _html_to_markdown(html: str) -> str:
