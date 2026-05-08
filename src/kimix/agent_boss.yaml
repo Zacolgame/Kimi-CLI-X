@@ -11,3 +11,4 @@ agent:
     - "kimix.memory.tools:Remember"
     - "kimix.memory.tools:Reflect"
     - "kimix.memory.tools:Recall"
+    - "kimix.memory.tools:Forget"

@@ -8,7 +8,7 @@ from kimi_cli.soul.agent import BuiltinSystemPromptArgs
 
 # This system prompt is designed to stop the modern LLM from over thinking and hallucination
 _SYSTEM_PROMP = (
-    '{AGENT_ROLE}.\n{NUMBERED}\n{AGENTS_MD}\n{SKILLS}\n{EXTRA}'
+    '{AGENT_ROLE}.\n\n{NUMBERED}\n{AGENTS_MD}\n{SKILLS}\n{EXTRA}'
 )
 
 class SystemPromptType(Enum):
@@ -83,7 +83,7 @@ def get_system_prompt(
                 items.append('Self-verify: catch errors, omissions, bad assumptions before final answer.')
 
 
-        items.append('Use `Remember`, `Recall`, `Reflect` whenever memory is needed: long tasks, heavy context, multi-turn work, or anything worth saving.')
+        items.append('Use `Remember`, `Recall`, `Reflect`, `Forget` whenever memory is needed: long tasks, heavy context, multi-turn work, or anything worth saving.')
         if agent_md.is_file():
             agent_md_content = agent_md.read_text(encoding='utf-8', errors='replace')
             agent_md_doc = f'AGENTS.md:\n```\n{agent_md_content}\n```\n'
@@ -92,8 +92,8 @@ def get_system_prompt(
             skill_doc = f'Skills:\n{args.KIMI_SKILLS}\n'
         numbered_block = ''
         if items:
-            numbered_block = 'Rules:\n' + ''.join(
-                f'{i + 1}. {item}\n' for i, item in enumerate(items)
+            numbered_block = ''.join(
+                f'- {item}\n' for item in items
             )
 
         return _SYSTEM_PROMP.format(

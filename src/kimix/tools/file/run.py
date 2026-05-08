@@ -84,11 +84,11 @@ class RunParams(BaseModel):
     )
     cwd: str | None = Field(
         default=None,
-        description="Working directory (optional)."
+        description="Working directory."
     )
     output_path: str | None = Field(
         default=None,
-        description="Output file path (optional)."
+        description="Output file path."
     )
 
 class Run(CallableTool2[RunParams]):

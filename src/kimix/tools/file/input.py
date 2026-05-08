@@ -8,7 +8,7 @@ from kimix.tools.background.utils import get_all_tasks
 
 class InputParams(BaseModel):
     task_id: str = Field(
-        description="Task ID to input to."
+        description="task id"
     )
     text: str = Field(
         description="Text to send to the running process's stdin."

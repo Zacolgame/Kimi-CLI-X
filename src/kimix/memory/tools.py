@@ -36,13 +36,13 @@ class RememberParams(BaseModel):
     importance: float = Field(default=5.0, ge=0.0, le=10.0, description="Importance (0-10).")
     tags: list[str] = Field(default_factory=list, description="Categorization tags.")
     memory_type: MemoryType = Field(default=MemoryType.SEMANTIC, description="Memory type.")
-    long_term: bool = Field(default=True, description="L3 if True, else L1+L2.")
+    long_term: bool = Field(default=True, description="Store in long-term memory if True; otherwise short-term/working memory.")
     expires_at: float | None = Field(default=None, description="Absolute expiry timestamp.")
 
 
 class Remember(CallableTool2):
     name: str = "Remember"
-    description: str = "Store a fact, observation, or knowledge in memory."
+    description: str = "Save a fact or observation to memory."
     params: type[BaseModel] = RememberParams
 
     async def __call__(self, params: RememberParams) -> ToolReturnValue:
@@ -78,12 +78,12 @@ class RecallParams(BaseModel):
     use_working: bool = Field(default=True, description="Include working memory.")
     use_short: bool = Field(default=True, description="Include short-term memory.")
     use_long: bool = Field(default=True, description="Include long-term memory.")
-    tags: list[str] = Field(default_factory=list, description="Tags to filter long-term memory.")
+    tags: list[str] = Field(default_factory=list, description="Filter long-term memories by these tags.")
 
 
 class Recall(CallableTool2):
     name: str = "Recall"
-    description: str = "Retrieve memories from all tiers."
+    description: str = "Search and retrieve memories across all tiers."
     params: type[BaseModel] = RecallParams
 
     async def __call__(self, params: RecallParams) -> ToolReturnValue:
@@ -118,7 +118,7 @@ class GetContextParams(BaseModel):
 
 class GetContext(CallableTool2):
     name: str = "GetContext"
-    description: str = "Generate context prompt from all memory tiers."
+    description: str = "Build a context prompt from all memory tiers for the given query."
     params: type[BaseModel] = GetContextParams
 
     async def __call__(self, params: GetContextParams) -> ToolReturnValue:
@@ -136,7 +136,7 @@ class ReflectParams(BaseModel):
 
 class Reflect(CallableTool2):
     name: str = "Reflect"
-    description: str = "Memory system status report. Optionally runs self-reflection."
+    description: str = "Show memory system status; optionally run deep self-reflection."
     params: type[BaseModel] = ReflectParams
 
     async def __call__(self, params: ReflectParams) -> ToolReturnValue:
@@ -157,3 +157,31 @@ class Reflect(CallableTool2):
             return ToolOk(output=report)
         except Exception as e:
             return ToolError(message=str(e), output="", brief="Failed to reflect on memory")
+
+
+class ForgetParams(BaseModel):
+    content: str = Field(description="Content of the memory to forget.")
+
+
+class Forget(CallableTool2):
+    name: str = "Forget"
+    description: str = "Lower the importance of or delete a long-term memory."
+    params: type[BaseModel] = ForgetParams
+
+    async def __call__(self, params: ForgetParams) -> ToolReturnValue:
+        try:
+            memory = await _get_memory_system()
+            entry_id = memory.long_term._hash(params.content)
+            entry = memory.long_term._get_entry(entry_id)
+            if entry is None:
+                return ToolOk(output="No matching memory found.")
+            old_importance = entry.importance
+            await _run_sync(memory.long_term.forget, entry_id)
+            entry_after = memory.long_term._get_entry(entry_id)
+            if entry_after is None:
+                return ToolOk(output=f"Forgotten and deleted: {params.content[:100]}...")
+            return ToolOk(
+                output=f"Forgotten (importance: {old_importance:.1f} -> {entry_after.importance:.1f}): {params.content[:100]}..."
+            )
+        except Exception as e:
+            return ToolError(message=str(e), output="", brief="Failed to forget memory")

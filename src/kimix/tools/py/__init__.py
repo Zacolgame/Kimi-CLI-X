@@ -17,7 +17,7 @@ class Params(BaseModel):
     )
     output_path: str | None = Field(
         default=None,
-        description="Output file path (optional)."
+        description="Output file path."
     )
     timeout: int = Field(
         default=10,

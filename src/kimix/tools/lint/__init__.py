@@ -1,15 +1,14 @@
 """Unified syntax lint tool that dispatches based on file extension."""
 
 import asyncio
+import subprocess
+import sys
 from pathlib import Path
 
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from pydantic import BaseModel, Field
 
 from kimix.tools.common import _maybe_export_output_async
-from kimix.tools.lint.cpp_lint import Cpplint
-# from .js_lint import func
-from .py_lint import MypyCheck
 
 
 class Params(BaseModel):
@@ -30,25 +29,18 @@ class Params(BaseModel):
     )
 
 
+_SCRIPT_DIR = Path(__file__).resolve().parents[4] / "scripts"
+
 _EXTENSION_MAP = {
-    # Python
-    ".py": MypyCheck,
-    # JavaScript / TypeScript
-    # ".js": JsTsSyntaxCheck,
-    # ".jsx": JsTsSyntaxCheck,
-    # ".mjs": JsTsSyntaxCheck,
-    # ".cjs": JsTsSyntaxCheck,
-    # ".ts": JsTsSyntaxCheck,
-    # ".tsx": JsTsSyntaxCheck,
-    # C++
-    ".cpp": Cpplint,
-    ".cc": Cpplint,
-    ".cxx": Cpplint,
-    ".h": Cpplint,
-    ".hpp": Cpplint,
-    ".hxx": Cpplint,
-    ".hh": Cpplint,
-    ".c++": Cpplint,
+    ".py": ("py_lint.py", []),
+    ".cpp": ("cpp_lint.py", ["--clangd-path", "{clangd_path}"]),
+    ".cc": ("cpp_lint.py", ["--clangd-path", "{clangd_path}"]),
+    ".cxx": ("cpp_lint.py", ["--clangd-path", "{clangd_path}"]),
+    ".h": ("cpp_lint.py", ["--clangd-path", "{clangd_path}"]),
+    ".hpp": ("cpp_lint.py", ["--clangd-path", "{clangd_path}"]),
+    ".hxx": ("cpp_lint.py", ["--clangd-path", "{clangd_path}"]),
+    ".hh": ("cpp_lint.py", ["--clangd-path", "{clangd_path}"]),
+    ".c++": ("cpp_lint.py", ["--clangd-path", "{clangd_path}"]),
 }
 
 
@@ -70,9 +62,9 @@ class SyntaxLint(CallableTool2):  # type: ignore[type-arg]
             )
 
         ext = file_path.suffix.lower()
-        tool_class = _EXTENSION_MAP.get(ext)
+        mapping = _EXTENSION_MAP.get(ext)
 
-        if tool_class is None:
+        if mapping is None:
             supported = ", ".join(sorted(set(_EXTENSION_MAP.keys())))
             msg = f"Unsupported file extension: {ext}. Supported: {supported}"
             return ToolError(
@@ -81,40 +73,55 @@ class SyntaxLint(CallableTool2):  # type: ignore[type-arg]
                 brief="Unsupported file type",
             )
 
-        # Build sub-tool params based on what each tool expects
-        tool_instance = tool_class()
-        # if tool_class is JsTsSyntaxCheck:
-        #     sub_params = tool_class.params(
-        #         file_path=params.file_path,
-        #         verbose=params.verbose,
-        #     )
-        if tool_class is MypyCheck:
-            sub_params = tool_class.params(
-                file_path=params.file_path,
-                project_root=params.project_root,
-                verbose=params.verbose,
-            )
-        elif tool_class is Cpplint:
-            sub_params = tool_class.params(
-                file_path=params.file_path,
-                project_root=params.project_root,
-                clangd_path=params.clangd_path,
-                verbose=params.verbose,
-            )
-        else:
-            # Fallback — should never happen
-            return ToolError(
-                output="",
-                message=f"Unknown linter class: {tool_class.__name__}",
-                brief="Internal linter dispatch error",
-            )
+        script_name, extra_template = mapping
+        script_path = _SCRIPT_DIR / script_name
+
+        cmd = [
+            sys.executable,
+            str(script_path),
+            str(file_path),
+            "--project-root",
+            params.project_root,
+        ]
+        if params.verbose:
+            cmd.append("--verbose")
+
+        for arg in extra_template:
+            cmd.append(arg.format(clangd_path=params.clangd_path))
 
         try:
-            result: ToolReturnValue = await tool_instance(sub_params)
-            return result
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_b, stderr_b = await proc.communicate()
         except Exception as e:
             return ToolError(
                 output="",
                 message=f"Lint tool failed: {e}",
+                brief="Lint failed",
+            )
+
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+        output = stdout
+        if stderr:
+            output += f"\n{stderr}"
+
+        output = await _maybe_export_output_async(output)
+
+        if proc.returncode == 0:
+            return ToolOk(output=output)
+        elif proc.returncode == 1:
+            return ToolError(
+                output=output,
+                message=output.strip().splitlines()[-1] if output.strip() else "Lint found issues",
+                brief="Lint found issues",
+            )
+        else:
+            return ToolError(
+                output=output,
+                message=output.strip().splitlines()[-1] if output.strip() else "Lint tool failed",
                 brief="Lint failed",
             )

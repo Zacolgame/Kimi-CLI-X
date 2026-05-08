@@ -44,7 +44,6 @@ class TestWorkerPrompt:
         fn = get_system_prompt(yolo=False, agent_role=SystemPromptType.Worker)
         prompt = fn(mock_args)
         assert "You are a terse coder" in prompt
-        assert "No chain-of-thought" in prompt
         assert "use `Run`" in prompt
         assert "Yolo mode" not in prompt
 
@@ -90,7 +89,6 @@ class TestTodoMakerPrompt:
         prompt = fn(mock_args)
         assert "You are a plan maker" in prompt
         assert "Only make plan, never implement" in prompt
-        assert "No chain-of-thought" in prompt
 
 
 class TestSwarmCoordinatorPrompt:
@@ -100,7 +98,6 @@ class TestSwarmCoordinatorPrompt:
         assert "You are a swarm coordinator" in prompt
         assert "AddNode" in prompt
         assert "AddEdge" in prompt
-        assert "No chain-of-thought" in prompt
 
 
 class TestThinkerPrompt:
@@ -112,9 +109,9 @@ class TestThinkerPrompt:
     def test_thinker_explicit_cot(self, mock_args: MagicMock) -> None:
         fn = get_system_prompt(agent_role=SystemPromptType.Thinker)
         prompt = fn(mock_args)
-        assert "Explicit chain-of-thought required" in prompt
+        assert "Think step by step" in prompt
         assert "<thinking>" in prompt
-        assert "<answer>" in prompt
+        assert "<quit/>" in prompt
 
     def test_thinker_no_no_cot(self, mock_args: MagicMock) -> None:
         """The 'No chain-of-thought' rule must be overridden."""
@@ -135,7 +132,7 @@ class TestThinkerPrompt:
     def test_thinker_continue(self, mock_args: MagicMock) -> None:
         fn = get_system_prompt(agent_role=SystemPromptType.Thinker)
         prompt = fn(mock_args)
-        assert "prior thinking" in prompt.lower() or "continue from it" in prompt.lower()
+        assert "think step by step" in prompt.lower()
 
     def test_thinker_sub_agent(self, mock_args: MagicMock) -> None:
         fn = get_system_prompt(is_sub_agent=True, agent_role=SystemPromptType.Thinker)
@@ -150,6 +147,7 @@ class TestThinkerPrompt:
         assert "Remember" in prompt
         assert "Recall" in prompt
         assert "Reflect" in prompt
+        assert "Forget" in prompt
         assert "SkillSearch" in prompt
 
     def test_thinker_memory_and_skills(self, mock_args: MagicMock) -> None:

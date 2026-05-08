@@ -14,7 +14,7 @@ class TaskOutputParams(BaseModel):
     """Parameters for TaskOutput."""
     task_id: str | None = Field(
         default=None,
-        description="Task ID to get output from. If None, list all tasks."
+        description="task id"
     )
     block: bool = Field(
         default=True,
@@ -28,7 +28,7 @@ class TaskOutputParams(BaseModel):
     )
     output_path: str | None = Field(
         default=None,
-        description="Output file path (optional)."
+        description="Output file path."
     )
     kill: bool = Field(
         default=False,
