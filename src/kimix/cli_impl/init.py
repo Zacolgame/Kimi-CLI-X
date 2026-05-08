@@ -61,7 +61,7 @@ _VALID_TYPES = (
     "vertexai",
 )
 
-_VALID_THINKING_EFFORTS = ("low", "medium", "high")
+_VALID_THINKING_EFFORTS = ('off', 'low', 'medium', 'high', 'xhigh', 'max')
 
 
 def _load_default_config() -> dict[str, Any]:
