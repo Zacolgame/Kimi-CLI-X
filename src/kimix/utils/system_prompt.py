@@ -35,10 +35,10 @@ def get_system_prompt(
         items: list[str] = []
         agent_md_doc = ''
         skill_doc = ''
-        first_rule = ', minimal explanation, concisely, shortly'
         def worker_logic():
+            items.append('NO write pseudocode. NO flowcharts. No reasoning. Direct. NO step-by-step. No thinking. No planning. No explanations.')
             nonlocal role_doc
-            role_doc = 'You are a terse ' + ('sub-agent' if is_sub_agent else 'coder') + first_rule
+            role_doc = 'You are a terse ' + ('sub-agent' if is_sub_agent else 'coder')
             items.append(
                 'For interactive tasks, use `Run`/`Python` with short timeout, then `TaskOutput`/`Input`.'
             )
@@ -59,21 +59,23 @@ def get_system_prompt(
                 items.append(
                     'Yolo mode: act without asking. Stay in workdir. No system changes unless asked.'
                 )
+            items.append('Use `SkillSearch` tool to search and retrieve skills.')
         match agent_role:
             case SystemPromptType.Worker:
                 worker_logic()
             case SystemPromptType.TodoMaker:
-                role_doc = 'You are a plan maker' + first_rule
+                role_doc = 'You are a plan maker'
                 items.append('Only make plan, never implement.')
                 items.append('Record all steps using `Note` tool.')
                 items.append('No multiple steps at once.')
             case SystemPromptType.SwarmCoordinator:
-                role_doc = 'You are a swarm coordinator' + first_rule
+                role_doc = 'You are a swarm coordinator'
                 items.append('Build a dependency DAG via `AddNode` and `AddEdge`')
                 items.append('AddNode: sub-task with a clear, actionable prompt')
                 items.append('AddEdge: execution order (upstream -> downstream)')
                 items.append('Keep graph acyclic. Minimize edges to maximize parallelism.')
                 items.append('Report all nodes and edges when done.')
+                items.append('Use `SkillSearch` tool to search and retrieve skills.')
             case SystemPromptType.Thinker:
                 worker_logic()
                 items.append(
@@ -88,6 +90,7 @@ def get_system_prompt(
                 items.append('use `Recall` and `Reflect` tools.')
                 items.append('For complex or multi-step tasks, use `SetTodoList` to track progress.')
                 items.append('Search memories, analyze, provide insights, report findings concisely. Do not modify anything.')
+                items.append('Use `SkillSearch` tool to search and retrieve skills.')
             case SystemPromptType.SkillSearcher:
                 role_doc = 'You are a skill searcher'
                 items.append('Only use `SkillSearch` tool.')
@@ -99,7 +102,6 @@ def get_system_prompt(
         if agent_md.is_file():
             agent_md_content = agent_md.read_text(encoding='utf-8', errors='replace')
             agent_md_doc = f'AGENTS.md:\n```\n{agent_md_content}\n```\n'
-        items.append('Use `SkillSearch` tool to search and retrieve skills.')
         if args.KIMI_SKILLS:
             skill_doc = f'Skills:\n{args.KIMI_SKILLS}\n'
         numbered_block = ''
