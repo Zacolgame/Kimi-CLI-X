@@ -82,7 +82,6 @@ prompt("What is the capital of France?")
 prompt(
     "Analyze this code",
     session=session,                   # Optional: use specific session (None=default)
-    read_agents_md=True,               # Optional: read AGENTS.md first if context is fresh
     skill_name="python",               # Optional: enable skill (str)
     output_function=custom_print,      # Optional: custom output handler for text chunks
     info_print=True,                   # Optional: print context usage after completion

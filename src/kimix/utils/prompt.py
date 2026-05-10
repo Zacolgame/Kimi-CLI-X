@@ -86,7 +86,6 @@ async def prompt_async(
     prompt_str: str,
     session: Session | None = None,
     # settings
-    read_agents_md: bool = False,
     skill_name: str | None = None,
     output_function: Callable[[str, bool], Any] | None = None,
     info_print: bool = True,
@@ -120,9 +119,6 @@ async def prompt_async(
                     prompt_str = f'Use skill:{skill_name}.\n' + prompt_str
         if skill_name:
             enable_skill(skill_name)
-        if session.status.context_usage < 1e-4 and read_agents_md and Path('AGENTS.md').exists():
-            prompt_str = f'Read AGENTS.md.\n' + prompt_str
-
         if info_print:
             print_debug(f'Start...', end='\n')
 
@@ -176,7 +172,6 @@ def prompt(
     prompt_str: str,
     session: Session | None = None,
     # settings
-    read_agents_md: bool = False,
     skill_name: str | None = None,
     output_function: Callable[[str, bool], Any] | None = None,
     info_print: bool = True,
@@ -189,7 +184,6 @@ def prompt(
             prompt_str,
             session,
             # settings
-            read_agents_md,
             skill_name,
             output_function,
             info_print,

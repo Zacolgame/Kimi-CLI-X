@@ -74,9 +74,10 @@ def _client_cli() -> None:
                                 sync_all()
                             input_str = None
                         else:
-                            print_warning(
-                                'File not executable, consider as prompt.')
-                            input_str = s
+                            print_debug('File not executable, consider as prompt.')
+                            for i in _split_text(s.splitlines()):
+                                text_arr.append(i)
+                            input_str = None
                     except KeyboardInterrupt as e:
                         print_warning('Keyboard Interrupt.')
                         input_str = None

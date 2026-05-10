@@ -88,12 +88,12 @@ _PATH_RE = re.compile(
         (?:
             [^\s?#<>\"'`|{},;:!?)\]]+ [\\/]
             |
-            [^\s?#<>\"'`|{},;:!?)\]]+ \s+ [^\s?#<>\"'`|{},;:!?)\]]+ [\\/]
+            [^\s?#<>\"'`|{},;:!?)\]]+ [^\S\r\n]+ [^\s?#<>\"'`|{},;:!?)\]]+ [\\/]
         )*
         (?:
-            [^\s?#<>\"'`|{},;:!?)\]]++ (?!\s+(?![a-z]+\b)[^\s?#<>\"'`|{},;:!?)\]]+)
+            [^\s?#<>\"'`|{},;:!?)\]]++ (?![^\S\r\n]+(?![a-z]+\b)[^\s?#<>\"'`|{},;:!?)\]]+)
             |
-            [^\s?#<>\"'`|{},;:!?)\]]+ \s+ (?! [a-z]+ \b ) [^\s?#<>\"'`|{},;:!?)\]]+
+            [^\s?#<>\"'`|{},;:!?)\]]+ [^\S\r\n]+ (?! [a-z]+ \b ) [^\s?#<>\"'`|{},;:!?)\]]+
         )?
     )
     """,
@@ -213,10 +213,10 @@ def _sanitize_text(text: str) -> str:
     text = text.translate(trans)
     text = _EMOJI_RE.sub("", text)
     text = _REPEAT_PUNCT_RE.sub(r"\1", text)
-
-    # From remove_redundant_whitespace
-    text = re.sub(r"[\s]+", " ", text).strip()
-
+    # From remove_redundant_whitespace – keep newlines, collapse horizontal
+    # whitespace only.
+    text = re.sub(r"[^\S\n]+", " ", text)
+    text = text.strip()
     return _restore_code(text, placeholders)
 
 

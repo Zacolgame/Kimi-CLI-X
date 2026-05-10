@@ -11,6 +11,7 @@ def _split_text(lines: list[str]) -> list[str]:
     for line in lines:
         strip_line = line.strip()
         if len(strip_line) == 0:
+            current_text.append('')
             continue
         if strip_line.startswith('/'):
             if current_text:

@@ -5,10 +5,6 @@ from unittest.mock import patch
 from kimix.utils.prompt_str import (
     escape_file_paths,
     clean_text,
-    remove_redundant_whitespace,
-    normalize_encoding,
-    remove_meaningless_symbols,
-    normalize_case,
 )
 
 
@@ -114,10 +110,9 @@ class TestEscapeFilePaths:
         text = "today is 2024/01/15"
         assert escape_file_paths(text) == "today is 2024/01/15"
 
-    def test_newlines_collapsed(self):
+    def test_newlines_preserved(self):
         text = "line1\nline2"
-        # remove_redundant_whitespace is now merged in
-        assert escape_file_paths(text) == "line1 line2"
+        assert escape_file_paths(text) == "line1\nline2"
 
     def test_empty_string(self):
         assert escape_file_paths("") == ""
@@ -138,7 +133,7 @@ class TestEscapeFilePaths:
     def test_whitespace_collapsed_by_default(self):
         text = "hello    world\n\n\nfoo"
         result = escape_file_paths(text)
-        assert result == "hello world foo"
+        assert result == "hello world\n\n\nfoo"
 
     def test_case_mode_lower(self):
         text = "Hello World"
@@ -157,7 +152,7 @@ class TestEscapeFilePaths:
 
     @patch("kimix.utils.prompt_str.Path.exists", return_value=True)
     def test_path_escape_with_whitespace_collapsed(self, mock_exists):
-        text = "check src/kimix/utils.py    for details"
+        text = "1.check src/kimix/utils.py\n2.for details"
         result = escape_file_paths(text)
         assert "`src/kimix/utils.py`" in result
         assert "  " not in result
@@ -270,34 +265,3 @@ class TestCleanText:
         text = "a\nb\tc"
         assert clean_text(text, keep_newlines=False) == "abc"
 
-
-class TestRemoveRedundantWhitespace:
-    def test_basic(self):
-        text = "hello    world\n\n\nfoo"
-        assert remove_redundant_whitespace(text) == "hello world foo"
-
-    def test_inline_code_preserved(self):
-        text = "hello `  world  ` foo"
-        assert remove_redundant_whitespace(text) == "hello `  world  ` foo"
-
-
-class TestNormalizeCase:
-    def test_lower(self):
-        text = "Hello World"
-        assert normalize_case(text, mode="lower") == "hello world"
-
-    def test_title(self):
-        text = "hello world"
-        assert normalize_case(text, mode="title") == "Hello World"
-
-
-class TestRemoveMeaninglessSymbols:
-    def test_remove_emoji(self):
-        text = "hello 😀 world"
-        assert remove_meaningless_symbols(text) == "hello  world"
-
-    def test_dedupe_punctuation(self):
-        text = "hello!!!???"
-        result = remove_meaningless_symbols(text)
-        assert "!!!" not in result
-        assert "???" not in result
