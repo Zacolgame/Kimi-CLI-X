@@ -179,6 +179,7 @@ class FileBuilder:
         self._search: Searcher | None = None
         self._doc_info: list[dict[str, Any]] = []
         self._cache_path = Path(output_path).with_suffix(".index_cache.pkl")
+        self._build_cache_path = Path(output_path).with_suffix(".build_cache.pkl")
         if self._cache_path.exists() and self._cache_valid():
             self._load_cache()
         else:
@@ -211,6 +212,20 @@ class FileBuilder:
                 f,
             )
 
+    def _load_build_cache(self) -> dict[str, Any]:
+        if self._build_cache_path.exists():
+            try:
+                with self._build_cache_path.open("rb") as f:
+                    return pickle.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _save_build_cache(self, cache: dict[str, Any]) -> None:
+        self._build_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._build_cache_path.open("wb") as f:
+            pickle.dump(cache, f)
+
     def _collect_files(self) -> list[tuple[str, Path]]:
         files: list[tuple[str, Path]] = []
         cwd = Path.cwd()
@@ -233,43 +248,103 @@ class FileBuilder:
                     files.append((rel, file_path))
         return files
 
+    def _process_file_lines(
+        self, rel: str, abs_path: Path, tokenizer: NgramTokenizer
+    ) -> list[dict[str, Any]] | None:
+        """Read and tokenize a single file; return cached line dicts or None on error."""
+        try:
+            lines: list[dict[str, Any]] = []
+            with abs_path.open("r", encoding="utf-8", errors="replace") as f:
+                for line_idx, line in enumerate(f):
+                    stripped = line.strip()
+                    if stripped:
+                        h = SimHash(stripped)
+                        fp = i_match_fingerprint(stripped.split())
+                        raw_tokens = tokenizer.tokenize(f"{rel}: {stripped}")
+                        stemmed = [
+                            porter_stem(t) if t.isalpha() and len(t) > 3 else t
+                            for t in raw_tokens
+                        ]
+                        lines.append(
+                            {
+                                "line_idx": line_idx,
+                                "content": stripped,
+                                "tokens": stemmed,
+                                "simhash": h.value,
+                                "fp": fp,
+                            }
+                        )
+            return lines
+        except OSError:
+            return None
+
     def _build(self) -> None:
-        index = InvertedIndex()
+        build_cache = self._load_build_cache()
         tokenizer = NgramTokenizer(n=self._n)
+        all_lines: list[tuple[str, int, str, list[str], int, str]] = []
+
+        # Deterministic order so cache behaviour is stable
+        files = sorted(self._collect_files(), key=lambda x: x[0])
+        current_rels = set()
+
+        for rel, abs_path in files:
+            current_rels.add(rel)
+            file_hash = self.file_reader._mapping.get(rel)
+            cached = build_cache.get(rel)
+            if cached and cached.get("hash") == file_hash:
+                for line in cached["lines"]:
+                    all_lines.append(
+                        (rel, line["line_idx"], line["content"], line["tokens"], line["simhash"], line["fp"])
+                    )
+                continue
+
+            processed = self._process_file_lines(rel, abs_path, tokenizer)
+            if processed is None:
+                continue
+            build_cache[rel] = {"hash": file_hash, "lines": processed}
+            for line in processed:
+                all_lines.append(
+                    (rel, line["line_idx"], line["content"], line["tokens"], line["simhash"], line["fp"])
+                )
+
+        # Evict entries for deleted files
+        for stale_rel in list(build_cache.keys()):
+            if stale_rel not in current_rels:
+                del build_cache[stale_rel]
+
+        self._save_build_cache(build_cache)
+
+        # Second pass: global dedup + index build
+        index = InvertedIndex()
         doc_info: list[dict[str, Any]] = []
         doc_id = 0
-        lsh = SimHashLSH()
+        # band_bits=16 makes LSH near-duplicate checks ~100x faster with
+        # hashbits=64 and threshold=3 while preserving correctness.
+        lsh = SimHashLSH(hashbits=64, band_bits=16)
         seen_imatch: set[str] = set()
-        for rel, abs_path in self._collect_files():
-            try:
-                with abs_path.open("r", encoding="utf-8", errors="replace") as f:
-                    for line_idx, line in enumerate(f):
-                        stripped = line.strip()
-                        if stripped:
-                            h = SimHash(stripped)
-                            fp = i_match_fingerprint(stripped.split())
 
-                            dup = False
-                            for other_id in lsh.candidates(h):
-                                if h.is_near_duplicate(lsh.hashes[other_id], threshold=3):
-                                    dup = True
-                                    break
-                            if not dup and fp in seen_imatch:
-                                dup = True
-                            if dup:
-                                continue
+        for rel, line_idx, content, tokens, simhash_val, fp in all_lines:
+            h = SimHash.__new__(SimHash)
+            h.hashbits = 64
+            h.value = simhash_val
 
-                            lsh.add(doc_id, h)
-                            seen_imatch.add(fp)
-
-                            # Optional stemming for Latin tokens to improve recall
-                            raw_tokens = tokenizer.tokenize(f"{rel}: {stripped}")
-                            stemmed = [porter_stem(t) if t.isalpha() and len(t) > 3 else t for t in raw_tokens]
-                            index.add_document(doc_id, stemmed)
-                            doc_info.append({"path": rel, "line_index": line_idx, "content": stripped})
-                            doc_id += 1
-            except OSError:
+            dup = False
+            if fp in seen_imatch:
+                dup = True
+            else:
+                for other_id in lsh.candidates(h):
+                    if h.is_near_duplicate(lsh.hashes[other_id], threshold=3):
+                        dup = True
+                        break
+            if dup:
                 continue
+
+            lsh.add(doc_id, h)
+            seen_imatch.add(fp)
+            index.add_document(doc_id, tokens)
+            doc_info.append({"path": rel, "line_index": line_idx, "content": content})
+            doc_id += 1
+
         self._doc_info = doc_info
         if doc_id > 0:
             index.finalize(stop_threshold=1.0)

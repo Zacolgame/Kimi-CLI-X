@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import pickle
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -245,6 +247,127 @@ class TestFileBuilder:
         assert len(results) > 0
         # line_index is 1-based in output
         assert results[0]["line_index"] == 3
+
+    def test_index_cache_created(self, tmp_path: Path) -> None:
+        d = tmp_path / "src"
+        d.mkdir()
+        (d / "a.py").write_text("hello world\n")
+        out = tmp_path / "hashes.json"
+        fb = FileBuilder([d], out)
+        assert fb._cache_path.exists()
+
+    def test_build_cache_created(self, tmp_path: Path) -> None:
+        d = tmp_path / "src"
+        d.mkdir()
+        (d / "a.py").write_text("hello world\n")
+        out = tmp_path / "hashes.json"
+        fb = FileBuilder([d], out)
+        assert fb._build_cache_path.exists()
+
+    def test_index_cache_content(self, tmp_path: Path) -> None:
+        d = tmp_path / "src"
+        d.mkdir()
+        (d / "a.py").write_text("hello world\n")
+        out = tmp_path / "hashes.json"
+        fb = FileBuilder([d], out)
+        with fb._cache_path.open("rb") as f:
+            cache = pickle.load(f)
+        assert "mapping" in cache
+        assert "doc_info" in cache
+        assert "searcher" in cache
+        assert cache["mapping"] == fb.file_reader._mapping
+
+    def test_index_cache_loads_on_reinit(self, tmp_path: Path) -> None:
+        d = tmp_path / "src"
+        d.mkdir()
+        (d / "a.py").write_text("hello world\n")
+        out = tmp_path / "hashes.json"
+        fb1 = FileBuilder([d], out)
+        assert fb1.search("hello")
+
+        fb2 = FileBuilder([d], out)
+        assert fb2._doc_info == fb1._doc_info
+        assert fb2.search("hello")
+
+    def test_index_cache_invalidated_when_file_changes(self, tmp_path: Path) -> None:
+        d = tmp_path / "src"
+        d.mkdir()
+        (d / "a.py").write_text("hello world\n")
+        out = tmp_path / "hashes.json"
+        fb1 = FileBuilder([d], out)
+        old_doc_info = fb1._doc_info.copy()
+
+        (d / "a.py").write_text("goodbye world\n")
+        fb2 = FileBuilder([d], out)
+        assert fb2._doc_info != old_doc_info
+        assert fb2.search("goodbye")
+
+    def test_build_cache_skips_unchanged_files(self, tmp_path: Path) -> None:
+        d = tmp_path / "src"
+        d.mkdir()
+        (d / "a.py").write_text("hello world\n")
+        (d / "b.py").write_text("foo bar\n")
+        out = tmp_path / "hashes.json"
+        fb = FileBuilder([d], out)
+
+        call_count = 0
+        original_process = fb._process_file_lines
+
+        def counting_process(
+            rel: str, abs_path: Path, tokenizer: Any
+        ) -> list[dict[str, Any]] | None:
+            nonlocal call_count
+            call_count += 1
+            return original_process(rel, abs_path, tokenizer)
+
+        fb._process_file_lines = counting_process
+        fb._build()
+        assert call_count == 0
+
+    def test_build_cache_processes_modified_file(self, tmp_path: Path) -> None:
+        d = tmp_path / "src"
+        d.mkdir()
+        (d / "a.py").write_text("hello world\n")
+        (d / "b.py").write_text("foo bar\n")
+        out = tmp_path / "hashes.json"
+        fb = FileBuilder([d], out)
+
+        (d / "a.py").write_text("hello modified world\n")
+        fb.file_reader.update()
+
+        call_count = 0
+        original_process = fb._process_file_lines
+
+        def counting_process(
+            rel: str, abs_path: Path, tokenizer: Any
+        ) -> list[dict[str, Any]] | None:
+            nonlocal call_count
+            call_count += 1
+            return original_process(rel, abs_path, tokenizer)
+
+        fb._process_file_lines = counting_process
+        fb._build()
+        assert call_count == 1
+
+    def test_build_cache_evicts_deleted_file(self, tmp_path: Path) -> None:
+        d = tmp_path / "src"
+        d.mkdir()
+        (d / "a.py").write_text("hello world\n")
+        (d / "b.py").write_text("foo bar\n")
+        out = tmp_path / "hashes.json"
+        fb = FileBuilder([d], out)
+
+        cache = fb._load_build_cache()
+        assert "a.py" in cache
+        assert "b.py" in cache
+
+        (d / "b.py").unlink()
+        fb.file_reader.update()
+        fb._build()
+
+        cache = fb._load_build_cache()
+        assert "a.py" in cache
+        assert "b.py" not in cache
 
 
 class TestFormattedPrint:
