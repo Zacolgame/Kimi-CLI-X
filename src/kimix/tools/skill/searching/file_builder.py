@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pickle
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -11,25 +12,15 @@ import numpy as np
 
 from kimix.retrieval import (
     BM25Scorer,
-    CoordinateAscent,
     InvertedIndex,
-    LambdaMART,
-    MinHash,
     NgramTokenizer,
     NoisyChannelSpeller,
     QueryPerformancePredictor,
-    RM3Expander,
-    RankBoost,
-    RankSVM,
-    RocchioExpander,
     Searcher,
     SimHash,
+    SimHashLSH,
     clarity_score,
-    cosine_similarity_tfidf,
-    hamming_distance,
     i_match_fingerprint,
-    jaccard_similarity_tokens,
-    jaro_similarity,
     jaro_winkler_similarity,
     metaphone,
     mmr_rerank,
@@ -187,7 +178,38 @@ class FileBuilder:
         self._b = b
         self._search: Searcher | None = None
         self._doc_info: list[dict[str, Any]] = []
-        self._build()
+        self._cache_path = Path(output_path).with_suffix(".index_cache.pkl")
+        if self._cache_path.exists() and self._cache_valid():
+            self._load_cache()
+        else:
+            self._build()
+            self._save_cache()
+
+    def _cache_valid(self) -> bool:
+        try:
+            with self._cache_path.open("rb") as f:
+                cache = pickle.load(f)
+            return cache.get("mapping") == self.file_reader._mapping
+        except Exception:
+            return False
+
+    def _load_cache(self) -> None:
+        with self._cache_path.open("rb") as f:
+            cache = pickle.load(f)
+        self._doc_info = cache["doc_info"]
+        self._search = cache["searcher"]
+
+    def _save_cache(self) -> None:
+        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._cache_path.open("wb") as f:
+            pickle.dump(
+                {
+                    "mapping": self.file_reader._mapping,
+                    "doc_info": self._doc_info,
+                    "searcher": self._search,
+                },
+                f,
+            )
 
     def _collect_files(self) -> list[tuple[str, Path]]:
         files: list[tuple[str, Path]] = []
@@ -216,11 +238,8 @@ class FileBuilder:
         tokenizer = NgramTokenizer(n=self._n)
         doc_info: list[dict[str, Any]] = []
         doc_id = 0
-        seen_simhash: dict[int, SimHash] = {}
-        seen_minhash: dict[int, MinHash] = {}
+        lsh = SimHashLSH()
         seen_imatch: set[str] = set()
-        seen_soundex: dict[str, set[int]] = {}
-        seen_metaphone: dict[str, set[int]] = {}
         for rel, abs_path in self._collect_files():
             try:
                 with abs_path.open("r", encoding="utf-8", errors="replace") as f:
@@ -228,43 +247,20 @@ class FileBuilder:
                         stripped = line.strip()
                         if stripped:
                             h = SimHash(stripped)
-                            mh = MinHash(stripped)
                             fp = i_match_fingerprint(stripped.split())
-                            tokens = stripped.split()
-                            first = tokens[0] if tokens else ""
-                            sx = soundex(first)
-                            mp = metaphone(first)
 
                             dup = False
-                            for other in seen_simhash.values():
-                                if h.is_near_duplicate(other, threshold=3):
+                            for other_id in lsh.candidates(h):
+                                if h.is_near_duplicate(lsh.hashes[other_id], threshold=3):
                                     dup = True
                                     break
-                            if not dup and doc_id in seen_minhash:
-                                if mh.jaccard(seen_minhash[doc_id]) >= 0.8:
-                                    dup = True
                             if not dup and fp in seen_imatch:
                                 dup = True
-                            if not dup and sx and sx in seen_soundex:
-                                for other_id in seen_soundex[sx]:
-                                    if mh.jaccard(seen_minhash[other_id]) >= 0.6:
-                                        dup = True
-                                        break
-                            if not dup and mp and mp in seen_metaphone:
-                                for other_id in seen_metaphone[mp]:
-                                    if mh.jaccard(seen_minhash[other_id]) >= 0.6:
-                                        dup = True
-                                        break
                             if dup:
                                 continue
 
-                            seen_simhash[doc_id] = h
-                            seen_minhash[doc_id] = mh
+                            lsh.add(doc_id, h)
                             seen_imatch.add(fp)
-                            if sx:
-                                seen_soundex.setdefault(sx, set()).add(doc_id)
-                            if mp:
-                                seen_metaphone.setdefault(mp, set()).add(doc_id)
 
                             # Optional stemming for Latin tokens to improve recall
                             raw_tokens = tokenizer.tokenize(f"{rel}: {stripped}")
@@ -289,14 +285,14 @@ class FileBuilder:
         diversity_lambda: float = 0.5,
         use_spelling: bool = True,
         use_stemming: bool = True,
-        use_rm3: bool = True,
-        use_rocchio: bool = True,
-        use_xquad: bool = True,
+        use_rm3: bool = False,
+        use_rocchio: bool = False,
+        use_xquad: bool = False,
         xquad_lambda: float = 0.5,
-        use_string_similarity: bool = True,
-        use_ltr: bool = True,
+        use_string_similarity: bool = False,
+        use_ltr: bool = False,
         ltr_model: str = "lambdamart",
-        use_adaptive_scoring: bool = True,
+        use_adaptive_scoring: bool = False,
     ) -> list[dict[str, Any]]:
         if self._search is None:
             return []
@@ -336,8 +332,11 @@ class FileBuilder:
             bm25_scores[i] = score
         max_bm25 = float(bm25_scores.max()) if n_results else 1.0
         min_bm25 = float(bm25_scores.min()) if n_results else 0.0
-        bm25_range = max_bm25 - min_bm25 if max_bm25 != min_bm25 else 1.0
-        bm25_norm = (bm25_scores - min_bm25) / bm25_range
+        bm25_range = max_bm25 - min_bm25
+        if bm25_range == 0:
+            bm25_norm = np.ones(n_results, dtype=np.float64)
+        else:
+            bm25_norm = (bm25_scores - min_bm25) / bm25_range
 
         string_scores = np.zeros(n_results, dtype=np.float64)
         if use_string_similarity:
@@ -381,6 +380,7 @@ class FileBuilder:
 
         # LTR re-ranking
         if use_ltr and len(candidate_results) >= 2:
+            from kimix.retrieval import LambdaMART, RankSVM, RankBoost
             features: list[list[float]] = []
             labels: list[float] = []
             c_doc_ids = [d for d, _ in candidate_results]
@@ -396,7 +396,7 @@ class FileBuilder:
             if features:
                 doc_feats = [(i, f) for i, f in enumerate(features)]
                 if ltr_model == "lambdamart":
-                    model: LambdaMART | RankSVM | RankBoost = LambdaMART(n_iterations=10, learning_rate=0.05)
+                    model = LambdaMART(n_iterations=10, learning_rate=0.05)
                     model.fit([features], [labels])  # type: ignore[arg-type]
                 elif ltr_model == "ranksvm":
                     model = RankSVM(learning_rate=0.01, n_iterations=50)
@@ -442,6 +442,7 @@ class FileBuilder:
     def update(self) -> None:
         if self.file_reader.update():
             self._build()
+            self._save_cache()
 
 
 def formatted_print(results: list[dict[str, Any]]) -> str:

@@ -17,7 +17,6 @@ from kimix.retrieval import (
     CoordinateAscent,
     InvertedIndex,
     LambdaMART,
-    MinHash,
     NgramTokenizer,
     NoisyChannelSpeller,
     QueryPerformancePredictor,
@@ -27,6 +26,7 @@ from kimix.retrieval import (
     RocchioExpander,
     Searcher,
     SimHash,
+    SimHashLSH,
     clarity_score,
     cosine_similarity_tfidf,
     hamming_distance,
@@ -51,8 +51,8 @@ class LongTermMemory:
         "storage_path", "dim", "entries", "index", "embedding_provider",
         "_dirty", "_backend", "_agent_id", "_bm25_index", "_bm25_searcher",
         "_doc_id_map", "_bm25_doc_to_entry_id", "_next_doc_id",
-        "_simhash_map", "_near_dup_threshold",
-        "_minhash_map", "_imatch_map", "_soundex_map", "_metaphone_map",
+        "_simhash_lsh", "_near_dup_threshold",
+        "_imatch_map", "_soundex_map", "_metaphone_map",
         "_speller",
     )
 
@@ -83,10 +83,9 @@ class LongTermMemory:
         self._doc_id_map: dict[str, int] = {}
         self._bm25_doc_to_entry_id: list[str] = []
         self._next_doc_id = 0
-        self._simhash_map: dict[str, SimHash] = {}
+        self._simhash_lsh = SimHashLSH()
         self._near_dup_threshold = 3
 
-        self._minhash_map: dict[str, MinHash] = {}
         self._imatch_map: dict[str, str] = {}
         self._soundex_map: dict[str, set[str]] = {}
         self._metaphone_map: dict[str, set[str]] = {}
@@ -114,24 +113,17 @@ class LongTermMemory:
         if self._backend is not None:
             return None
         h = SimHash(content)
-        mh = MinHash(content)
         fp = i_match_fingerprint(content.split())
-        sx = soundex(content.split()[0]) if content.split() else ""
-        mp = metaphone(content.split()[0]) if content.split() else ""
-        for eid, other in self._simhash_map.items():
+
+        # 1. SimHash LSH candidates (catches near-duplicates and exact duplicates)
+        for eid in self._simhash_lsh.candidates(h):
+            other = self._simhash_lsh.hashes[eid]
             if h.is_near_duplicate(other, threshold=self._near_dup_threshold):
                 return eid
-            # MinHash near-duplicate check
-            if eid in self._minhash_map:
-                if mh.jaccard(self._minhash_map[eid]) >= 0.8:
-                    return eid
-            # I-Match exact fingerprint
-            if eid in self._imatch_map and self._imatch_map[eid] == fp:
-                return eid
-            # Phonetic dedup on first word
-            if sx and sx in self._soundex_map and eid in self._soundex_map[sx]:
-                return eid
-            if mp and mp in self._metaphone_map and eid in self._metaphone_map[mp]:
+
+        # 2. I-Match exact fingerprint fallback
+        for eid, existing_fp in self._imatch_map.items():
+            if existing_fp == fp:
                 return eid
         return None
 
@@ -151,8 +143,7 @@ class LongTermMemory:
                     return
             self.entries[entry_id] = entry
             self._update_index(entry_id, entry)
-            self._simhash_map[entry_id] = SimHash(entry.content)
-            self._minhash_map[entry_id] = MinHash(entry.content)
+            self._simhash_lsh.add(entry_id, SimHash(entry.content))
             tokens = entry.content.split()
             self._imatch_map[entry_id] = i_match_fingerprint(tokens)
             first = tokens[0] if tokens else ""
@@ -246,8 +237,7 @@ class LongTermMemory:
                 entry_id = self._hash(entry.content)
                 self.entries[entry_id] = entry
                 self._update_index(entry_id, entry)
-                self._simhash_map[entry_id] = SimHash(entry.content)
-                self._minhash_map[entry_id] = MinHash(entry.content)
+                self._simhash_lsh.add(entry_id, SimHash(entry.content))
                 tokens = entry.content.split()
                 self._imatch_map[entry_id] = i_match_fingerprint(tokens)
                 first = tokens[0] if tokens else ""
@@ -668,8 +658,7 @@ class LongTermMemory:
         self._save()
 
     def _remove_from_dedup_maps(self, entry_id: str, entry: MemoryEntry) -> None:
-        self._simhash_map.pop(entry_id, None)
-        self._minhash_map.pop(entry_id, None)
+        self._simhash_lsh.remove(entry_id)
         self._imatch_map.pop(entry_id, None)
         tokens = entry.content.split()
         first = tokens[0] if tokens else ""

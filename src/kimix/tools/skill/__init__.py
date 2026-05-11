@@ -1,3 +1,5 @@
+import hashlib
+
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from pydantic import BaseModel, Field
 from typing import override
@@ -23,6 +25,10 @@ class IndexerParams(BaseModel):
         default=False,
         description="If true, launch a sub-agent; query can be more specific and detailed than a few keywords."
     )
+    dest_path: list[str] | None = Field(
+        default=None,
+        description="If provided, overrides the skill directories to search."
+    )
 
 
 
@@ -32,27 +38,27 @@ class SkillSearch(CallableTool2[IndexerParams]):
     name: str = "SkillSearch"
     description: str = "Search skills by keywords."
     params: type[IndexerParams] = IndexerParams
-    file_builder_inited: bool = False
-    file_builder: FileBuilder | None = None
+    file_builder: dict[str, FileBuilder] = {}
 
     def __init__(self, session: Session):
         super().__init__()
         self._session = session
+        self.file_builder: dict[str, FileBuilder] = {}
 
     @override
     async def __call__(self, params: IndexerParams) -> ToolReturnValue:
         if self._session.get_custom_data().get("is_sub_agent"):
             params.use_agent = False
         import kimix.base as base
-        if not self.file_builder_inited:
-            skill_dirs = base.get_skill_dirs(False)
-            self.file_builder = FileBuilder(skill_dirs, '.kimix_cache/skill_config.json')
-            self.file_builder_inited = True
-        if self.file_builder is None:
-            return ToolOk(output='')
+        skill_dirs = params.dest_path if params.dest_path is not None else [str(d) for d in base.get_skill_dirs(False)]
+        dirs_hash = hashlib.md5("|".join(sorted(skill_dirs)).encode()).hexdigest()
+        if dirs_hash not in self.file_builder:
+            config_path = f'.kimix_cache/skill_config_{dirs_hash}.json'
+            self.file_builder[dirs_hash] = FileBuilder(skill_dirs, config_path)
+        file_builder = self.file_builder[dirs_hash]
         try:
-            self.file_builder.update()
-            results = self.file_builder.search(
+            file_builder.update()
+            results = file_builder.search(
                 params.query, top_k=params.top_k)
             output = formatted_print(results)
 
@@ -72,13 +78,9 @@ class SkillSearch(CallableTool2[IndexerParams]):
                     provider_dict = custom_data.get("provider_dict")
                     if provider_dict is None:
                         provider_dict = dict(base._default_provider) if base._default_provider is not None else {}
-                    origin_temp = provider_dict.get("temperature", 1.0)
-                    provider_dict["temperature"] = origin_temp * 0.3
-                    provider_dict["thinking_effort"] = 'off'
                     chat_provider = custom_data.get("chat_provider")
                     session = await _create_session_async(
                         agent_file=base._default_agent_file_dir / "agent_skill_searcher.yaml",
-                        is_sub_agent=True,
                         agent_type=SystemPromptType.SkillSearcher,
                         provider_dict=provider_dict,
                         chat_provider=chat_provider,

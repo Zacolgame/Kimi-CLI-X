@@ -29,7 +29,6 @@ session = create_session(
     resume=False,                      # Optional: resume existing session
     provider_dict=None,                # Optional: custom LLM provider config dict
     chat_provider=None,                # Optional: custom ChatProvider instance
-    is_sub_agent=False,                # Optional: mark as sub-agent session
     agent_type=SystemPromptType.Worker, # Optional: Worker, TodoMaker, or SwarmCoordinator
     vfs_path=None,                     # Optional: Path for virtual file system
     extra_system_prompt=None           # Optional: additional system prompt text

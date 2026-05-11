@@ -53,7 +53,6 @@ async def _create_session_async(
     resume: bool = False,
     provider_dict: dict[str, Any] | None = None,
     chat_provider: ChatProvider | None = None,
-    is_sub_agent: bool = False,
     agent_type: SystemPromptType = SystemPromptType.Worker,
     vfs_path: Path | None = None,
     extra_system_prompt: str | None = None
@@ -74,8 +73,7 @@ async def _create_session_async(
         skills_dir) if skills_dir is not None else base.get_skill_dirs()
     system_prompts: Callable[[BuiltinSystemPromptArgs], str] | None = None
     if system_prompts is None:
-        system_prompts = get_system_prompt(
-            is_sub_agent, yolo, work_dir, extra_system_prompt, agent_type)
+        system_prompts = get_system_prompt(yolo, work_dir, extra_system_prompt, agent_type)
     if resume:
         session = await Session.resume(
             session_id=session_id,
@@ -125,7 +123,6 @@ def create_session(
     resume: bool = False,
     provider_dict: dict[str, Any] | None = None,
     chat_provider: ChatProvider | None = None,
-    is_sub_agent: bool = False,
     agent_type: SystemPromptType = SystemPromptType.Worker,
     vfs_path: Path | None = None,
     extra_system_prompt: str | None = None
@@ -140,7 +137,6 @@ def create_session(
         resume=resume,
         provider_dict=provider_dict,
         chat_provider=chat_provider,
-        is_sub_agent=is_sub_agent,
         agent_type=agent_type,
         vfs_path=vfs_path,
         extra_system_prompt=extra_system_prompt

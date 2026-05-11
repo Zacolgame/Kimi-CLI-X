@@ -141,7 +141,6 @@ class Recall(CallableTool2):
                     chat_provider = custom_data.get("chat_provider")
                     session = await _create_session_async(
                         agent_file=base._default_agent_file_dir / "agent_recall.yaml",
-                        is_sub_agent=True,
                         agent_type=SystemPromptType.Recaller,
                         provider_dict=provider_dict,
                         chat_provider=chat_provider,

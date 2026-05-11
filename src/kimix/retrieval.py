@@ -1157,6 +1157,51 @@ class SimHash:
         return self.distance(other) <= threshold
 
 
+class SimHashLSH:
+    """Locality-sensitive hashing for SimHash to speed up near-duplicate checks."""
+
+    __slots__ = ("hashbits", "band_bits", "num_bands", "buckets", "hashes")
+
+    def __init__(self, hashbits: int = 64, band_bits: int = 4) -> None:
+        self.hashbits = hashbits
+        self.band_bits = band_bits
+        self.num_bands = hashbits // band_bits
+        self.buckets: dict[tuple[int, int], set[int]] = {}
+        self.hashes: dict[int, SimHash] = {}
+
+    def add(self, doc_id: int, simhash: SimHash) -> None:
+        self.hashes[doc_id] = simhash
+        mask = (1 << self.band_bits) - 1
+        for band in range(self.num_bands):
+            val = (simhash.value >> (band * self.band_bits)) & mask
+            key = (band, val)
+            self.buckets.setdefault(key, set()).add(doc_id)
+
+    def candidates(self, simhash: SimHash) -> set[int]:
+        candidates: set[int] = set()
+        mask = (1 << self.band_bits) - 1
+        for band in range(self.num_bands):
+            val = (simhash.value >> (band * self.band_bits)) & mask
+            key = (band, val)
+            if key in self.buckets:
+                candidates.update(self.buckets[key])
+        return candidates
+
+    def remove(self, doc_id: int) -> None:
+        h = self.hashes.pop(doc_id, None)
+        if h is None:
+            return
+        mask = (1 << self.band_bits) - 1
+        for band in range(self.num_bands):
+            val = (h.value >> (band * self.band_bits)) & mask
+            key = (band, val)
+            bucket = self.buckets.get(key)
+            if bucket is not None:
+                bucket.discard(doc_id)
+                if not bucket:
+                    del self.buckets[key]
+
+
 # ---------------------------------------------------------------------------
 # MMR – Maximal Marginal Relevance
 # ---------------------------------------------------------------------------
@@ -1860,10 +1905,17 @@ class MinHash:
     """MinHash signature for Jaccard similarity estimation."""
 
     __slots__ = ("num_perm", "signature")
+    _SEEDS_CACHE: dict[int, np.ndarray] = {}
 
     def __init__(self, text: str = "", num_perm: int = 128, k: int = 3) -> None:
         self.num_perm = num_perm
         self.signature = self._compute(text, k)
+
+    @classmethod
+    def _get_seeds(cls, n: int) -> np.ndarray:
+        if n not in cls._SEEDS_CACHE:
+            cls._SEEDS_CACHE[n] = np.array([hash(i) & 0xFFFFFFFF for i in range(n)], dtype=np.uint32)
+        return cls._SEEDS_CACHE[n]
 
     @staticmethod
     def _shingles(text: str, k: int) -> set[str]:
@@ -1877,11 +1929,14 @@ class MinHash:
         shingles = self._shingles(text, k)
         if not shingles:
             return [0] * self.num_perm
-        shingles_list = list(shingles)
-        sig = [
-            min((hash((s, i)) & 0xFFFFFFFF for s in shingles_list), default=0xFFFFFFFF)
-            for i in range(self.num_perm)
-        ]
+        shingle_hashes = np.fromiter(
+            (hash(s) & 0xFFFFFFFF for s in shingles),
+            dtype=np.uint32,
+            count=len(shingles),
+        )
+        seeds = self._get_seeds(self.num_perm)
+        # Broadcast XOR: (num_perm, 1) ^ (len(shingles),) -> (num_perm, len(shingles))
+        sig = np.min(shingle_hashes ^ seeds[:, None], axis=1).tolist()
         return sig
 
     def jaccard(self, other: MinHash) -> float:

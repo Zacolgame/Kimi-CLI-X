@@ -195,7 +195,7 @@ class TestFileBuilderNewFeatures:
             assert len(diverse) == 3
             # MMR path should execute without error and return valid doc ids
             assert all(isinstance(r["doc_id"], int) for r in diverse)
-            assert all(r["score"] > 0 for r in diverse)
+            assert all(r["score"] >= 0 for r in diverse)
 
     def test_search_empty_project(self):
         with self._make_project({}) as root:

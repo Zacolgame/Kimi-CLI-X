@@ -17,11 +17,11 @@ class SystemPromptType(Enum):
     Thinker = 2
     SwarmCoordinator = 3
     Recaller = 4
-    SkillSearcher = 5
+    SkillSearcher = 5,
+    TrivialSubAgent = 6
     
 
 def get_system_prompt(
-        is_sub_agent: bool = False,
         yolo: bool | None = None,
         work_dir: Optional[KaosPath] = None,
         extra_system_prompt: str | None = None,
@@ -43,7 +43,7 @@ def get_system_prompt(
             nonlocal role_doc, use_agent_md, use_skills
             use_agent_md = True
             use_skills = True
-            role_doc = 'You are a terse ' + ('sub-agent' if is_sub_agent else 'coder')
+            role_doc = 'You are a terse coder'
             items.append('Interactive: `Run` short timeout, then `TaskOutput`/`Input`.')
             items.append('Python: `python -c <code>`.')
             items.append('Multi-step: use `SetTodoList`. Finish all before ending.')
@@ -63,6 +63,7 @@ def get_system_prompt(
             items.append('Drop context aggressively. `Remember` important/long-running info.')
             items.append('`Forget` stale or duplicate info.')
             items.append('`Recall` before any work.')
+            items.append('Use `Agent` to enable sub-agent, for research, analyze, find, retrieval.')
         match agent_role:
             case SystemPromptType.Worker:
                 worker_logic()
@@ -89,6 +90,7 @@ def get_system_prompt(
                 items.append('Self-verify: catch errors and bad assumptions.')
             case SystemPromptType.Recaller:
                 role_doc = 'You are a memory recaller'
+                items.append('Reject write/edit tasks')
                 items.append('Use `Recall` and `Reflect`.')
                 items.append('Multi-step: use `SetTodoList`.')
                 items.append('Search, analyze, report concisely. Read-only.')
@@ -96,7 +98,15 @@ def get_system_prompt(
             case SystemPromptType.SkillSearcher:
                 use_skills = True
                 role_doc = 'You are a skill searcher'
-                items.append('Only use `SkillSearch`.')
+                items.append('Reject write/edit tasks')
+                items.append('`SkillSearch` to find skills.')
+                items.append('Multi-step: use `SetTodoList`.')
+                items.append('Search, analyze, report concisely. Read-only.')
+            case SystemPromptType.TrivialSubAgent:
+                use_skills = True
+                role_doc = 'You are a read-only sub-agent'
+                items.append('Reject write/edit tasks')
+                items.append('`SkillSearch` to find skills.')
                 items.append('Multi-step: use `SetTodoList`.')
                 items.append('Search, analyze, report concisely. Read-only.')
 
