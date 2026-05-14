@@ -18,7 +18,7 @@ from kimix.tools.file.bash import (
     Touch, Tr, Traceroute, Trap, Tree, TrueCmd, Type, Ulimit, Umask, Uname, Unexpand, Uniq, Unxz, Unzip,
     Uptime, Vmstat, Wc, Wget, Which, Who, Whoami, Xxd, Xz, Yes, Zip,
 )
-
+import os
 
 _BASH_COMMANDS: dict[str, CallableTool2] = {
     "alias": Alias(),
@@ -185,13 +185,17 @@ class RunParams(BaseModel):
         le=180,
         description="Timeout in seconds."
     )
+    output_path: str | None = Field(
+        default=None,
+        description="Output file path."
+    )
     cwd: str | None = Field(
         default=None,
         description="Working directory."
     )
-    output_path: str | None = Field(
+    env: list[str] | None = Field(
         default=None,
-        description="Output file path."
+        description="Environment variables to set for the subprocess, in 'KEY=VALUE' format. If no '=' is present, the value is set to '1'."
     )
 
 class Run(CallableTool2[RunParams]):
@@ -285,7 +289,16 @@ class Run(CallableTool2[RunParams]):
             # check if using python
             if params.path == 'python':
                 params.path = sys.executable
-            task = ProcessTask(params.path, params.args, params.cwd)
+            env_dict: dict[str, str] | None = None
+            if params.env:
+                env_dict = {}
+                for item in params.env:
+                    if '=' in item:
+                        key, value = item.split('=', 1)
+                        env_dict[key] = value
+                    else:
+                        env_dict[item] = '1'
+            task = ProcessTask(params.path, params.args, params.cwd, env_dict)
             task_id = await task.start(self._session, "run", Path(params.path).stem)
 
             # Wait for completion with timeout (allow a small buffer for cleanup)

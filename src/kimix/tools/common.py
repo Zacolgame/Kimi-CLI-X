@@ -123,7 +123,7 @@ async def _maybe_export_output_async(output: str, key: Path | None = None) -> st
 class ProcessTask:
     """Run a subprocess in the background with stream output and input support."""
 
-    def __init__(self, path: str, args: list[str] | None = None, cwd: str | None = None) -> None:
+    def __init__(self, path: str, args: list[str] | None = None, cwd: str | None = None, env: dict[str, str] | None = None) -> None:
         import shutil
         # On Windows, subprocess.Popen with shell=False does not resolve .cmd/.bat
         # via PATHEXT. Use shutil.which to find the real executable (e.g. pnpm.CMD).
@@ -134,6 +134,7 @@ class ProcessTask:
         self.path = path
         self.args = args or []
         self.cwd = cwd
+        self.env = env
         self._stop_event = threading.Event()
         self._process_ref: asyncio.subprocess.Process | None = None
         self._stream: 'BackgroundStream' | None = None
@@ -147,11 +148,14 @@ class ProcessTask:
             if self._stop_event.is_set():
                 return False
             # Start the process
+            process_env = os.environ.copy()
+            if self.env:
+                process_env.update(self.env)
             process = await asyncio.create_subprocess_exec(
                 self.path,
                 *self.args,
                 cwd=self.cwd,
-                env=os.environ,
+                env=process_env,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -159,9 +163,8 @@ class ProcessTask:
             self._process_ref = process
             # Read stdout and stderr concurrently with stop checking
 
-            assert process.stdout is not None
-            assert process.stderr is not None
-            assert process.stdin is not None
+            if process.stdout is None:
+                raise RuntimeError("Subprocess stdout is None")
 
             async def read_stdout() -> None:
                 try:
@@ -183,6 +186,8 @@ class ProcessTask:
                     pass
 
             async def read_stderr() -> None:
+                if process.stderr is None:
+                    return
                 try:
                     decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
                     while True:
@@ -206,6 +211,8 @@ class ProcessTask:
                     while True:
                         if self._stop_event.is_set() or process.returncode is not None:
                             break
+                        if process.stdin is None:
+                            raise RuntimeError("Subprocess stdin is None")
                         try:
                             data = self._input_queue.get_nowait()
                         except queue.Empty:
@@ -218,7 +225,9 @@ class ProcessTask:
 
             # Start reader/writer tasks
             stdout_task = asyncio.create_task(read_stdout())
-            stderr_task = asyncio.create_task(read_stderr())
+            stderr_task: asyncio.Task[None] | None = None
+            if process.stderr is not None:
+                stderr_task = asyncio.create_task(read_stderr())
             stdin_task = asyncio.create_task(write_stdin())
 
             # Wait for process completion with periodic stop checking
@@ -238,16 +247,18 @@ class ProcessTask:
 
             # Cancel tasks and wait for them to finish
             stdout_task.cancel()
-            stderr_task.cancel()
+            if stderr_task is not None:
+                stderr_task.cancel()
             stdin_task.cancel()
             try:
                 await stdout_task
             except asyncio.CancelledError:
                 pass
-            try:
-                await stderr_task
-            except asyncio.CancelledError:
-                pass
+            if stderr_task is not None:
+                try:
+                    await stderr_task
+                except asyncio.CancelledError:
+                    pass
             try:
                 await stdin_task
             except asyncio.CancelledError:
@@ -260,12 +271,13 @@ class ProcessTask:
                     q.put_nowait(remaining_stdout.decode('utf-8', errors='replace'))
             except (IOError, OSError, ValueError):
                 pass
-            try:
-                remaining_stderr = await process.stderr.read()
-                if remaining_stderr:
-                    q.put_nowait("[stderr] " + remaining_stderr.decode('utf-8', errors='replace'))
-            except (IOError, OSError, ValueError):
-                pass
+            if process.stderr is not None:
+                try:
+                    remaining_stderr = await process.stderr.read()
+                    if remaining_stderr:
+                        q.put_nowait("[stderr] " + remaining_stderr.decode('utf-8', errors='replace'))
+                except (IOError, OSError, ValueError):
+                    pass
             # Report completion status
             return_code = process.returncode
             if self._stop_event.is_set():

@@ -25,7 +25,7 @@ default_config = '''
         "reserved_context_size": 50000,
         "compaction_trigger_ratio": 0.85
     },
-    "max_tokens": 128000,
+    "max_tokens": 131072,
     "show_thinking_stream": true,
     "thinking_effort": "max",
     "temperature": 1.0,
@@ -125,12 +125,21 @@ def _ask_api_key() -> str:
 
 
 def _ask_context_size(default: str = "256k") -> int:
-    options_str = " ".join(_CONTEXT_SIZE_OPTIONS.keys())
+    options_str = ", ".join(_CONTEXT_SIZE_OPTIONS.keys())
     while True:
-        value = _ask(f"Enter model context size ({options_str})", default)
+        value = _ask(f"Enter model context size ({options_str} or a number)", default)
         if value in _CONTEXT_SIZE_OPTIONS:
             return _CONTEXT_SIZE_OPTIONS[value]
-        print_warning(f"Invalid size '{value}', please choose from: {options_str}")
+        try:
+            num = int(value)
+        except ValueError:
+            print_warning(f"Invalid size '{value}', please choose from: {options_str} or enter a specific number")
+            continue
+        if num <= 1:
+            print_warning(f"Context size must be larger than 1, got {num}")
+            continue
+        num = max(num, 1.)
+        return num
 
 
 def _ask_thinking_effort(default: str = "max") -> str:
@@ -198,43 +207,57 @@ def _ask_max_token(context_size: int, reserved: int, default: int) -> int:
         return num
 
 
-def _ask_sub_provider() -> dict[str, Any] | None:
+def _ask_sub_provider(defaults: dict[str, Any] | None = None) -> dict[str, Any] | None:
     print_info("Configure a sub-agent provider? (y/n)")
     v = input().strip().lower()
     if v != 'y':
         return None
 
+    def _default(key: str, fallback: Any) -> Any:
+        if defaults is None:
+            return fallback
+        return defaults.get(key, fallback)
+
+    _CONTEXT_SIZE_BY_INT = {v: k for k, v in _CONTEXT_SIZE_OPTIONS.items()}
+
     print_info("--- Sub-provider configuration ---")
     sub: dict[str, Any] = {}
 
-    model = _ask_model_name("kimi-for-coding")
+    model = _ask_model_name(_default("model", "kimi-for-coding"))
     sub["model"] = model
 
-    model_type = _ask_model_type("kimi")
+    model_type = _ask_model_type(_default("type", "kimi"))
     sub["type"] = model_type
 
-    url = _ask_url("https://api.kimi.com/coding/v1")
+    url = _ask_url(_default("url", "https://api.kimi.com/coding/v1"))
     sub["url"] = url
 
     api_key = _ask_api_key()
     sub["api_key"] = api_key
 
-    temperature = _ask_temperature(1.0)
+    temperature = _ask_temperature(_default("temperature", 1.0))
     sub["temperature"] = temperature
 
-    context_size = _ask_context_size("256k")
+    ctx_default = _default("max_context_size", 262144)
+    ctx_str = _CONTEXT_SIZE_BY_INT.get(ctx_default, "256k")
+    context_size = _ask_context_size(ctx_str)
     sub["max_context_size"] = context_size
 
     thinking = _ask_thinking_effort("off")
     sub["thinking_effort"] = thinking
 
-    caps = _ask_capabilities(("thinking",))
+    caps = _default("capabilities", ("thinking",))
+    if isinstance(caps, list):
+        caps = tuple(caps)
+    elif isinstance(caps, str):
+        caps = (caps,)
+    caps = _ask_capabilities(caps)
     if "always_thinking" in caps and "thinking" in caps:
         caps.remove("thinking")
     sub["capabilities"] = caps
 
     reserved = 50000
-    max_tokens = _ask_max_token(context_size, reserved, 128000)
+    max_tokens = _ask_max_token(context_size, reserved, _default("max_tokens", 128000))
     sub["max_tokens"] = max_tokens
 
     # Ensure loop_control for sub-provider disables ralph
@@ -282,7 +305,7 @@ def init(initialize: bool = True) -> None:
             config["max_context_size"] = context_size
 
             reserved = config.get("loop_control", {}).get("reserved_context_size", 50000)
-            max_tokens = _ask_max_token(context_size, reserved, 128000)
+            max_tokens = _ask_max_token(context_size, reserved, 131072)
             config["max_tokens"] = max_tokens
 
             thinking = _ask_thinking_effort(config.get("thinking_effort", "low"))
@@ -302,7 +325,7 @@ def init(initialize: bool = True) -> None:
             temperature = _ask_temperature(config.get("temperature", 1.0))
             config["temperature"] = temperature
 
-            sub_provider = _ask_sub_provider()
+            sub_provider = _ask_sub_provider(config)
             if sub_provider is not None:
                 _save_second_config(sub_provider)
             elif _SECOND_CONFIG_PATH.exists():
