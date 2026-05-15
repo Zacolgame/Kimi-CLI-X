@@ -1,0 +1,513 @@
+from __future__ import annotations
+
+import asyncio
+import inspect
+from collections.abc import AsyncGenerator
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
+
+from kaos.path import KaosPath
+from kimi_cli.app import KimiCLI
+from kimi_cli.config import Config
+from kimi_cli.llm import LLM
+from kimi_cli.session import Session as CliSession
+from kimi_cli.soul import StatusSnapshot
+from kimi_cli.safety_check import sanitize_for_tokenizer
+from kimi_cli.wire.types import ContentPart, TextPart, ThinkPart, WireMessage
+from kimi_cli.soul.agent import BuiltinSystemPromptArgs
+from kosong.chat_provider import ChatProvider
+
+from kimi_agent_sdk._exception import SessionStateError
+
+_prompt_semaphore = asyncio.Semaphore(5)
+
+if TYPE_CHECKING:
+    from kimi_agent_sdk import MCPConfig
+
+
+def _ensure_type(name: str, value: object, expected: type) -> None:
+    if not isinstance(value, expected):
+        raise TypeError(f"{name} must be {expected.__name__}, got {type(value).__name__}")
+
+def _resolve_skills_dirs(
+    skills_dir: KaosPath | None,
+    skills_dirs: list[KaosPath] | None,
+) -> list[KaosPath] | None:
+    resolved: list[KaosPath] = []
+
+    if skills_dir is not None:
+        _ensure_type("skills_dir", skills_dir, KaosPath)
+        resolved.append(skills_dir)
+
+    if skills_dirs is not None:
+        _ensure_type("skills_dirs", skills_dirs, list)
+        for idx, item in enumerate(skills_dirs):
+            _ensure_type(f"skills_dirs[{idx}]", item, KaosPath)
+        resolved.extend(skills_dirs)
+
+    return resolved or None
+
+
+from kimi_cli.soul.context_records import ExportedContext  # noqa: E402
+
+
+class Session:
+    """
+    Kimi Agent session with low-level control.
+
+    Use this class when you need full access to Wire messages, manual approval
+    handling, or session persistence across prompts.
+    """
+
+    def __init__(self, cli: KimiCLI) -> None:
+        self._cli = cli
+        self._cancel_event: asyncio.Event | None = None
+        self._closed = False
+        self._create_kwargs: dict[str, Any] = {}
+
+    async def clear(self, **custom_arguments) -> None:
+        """Clear the session by removing the context file and re-creating the CLI.
+
+        This cancels any ongoing prompt, cleans up tool resources, deletes the
+        session's ``context.jsonl`` file, and re-creates the underlying CLI with
+        the same session ID and original creation parameters.
+
+        Raises:
+            SessionStateError: When the session is closed.
+        """
+        if self._closed:
+            return
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+        await self._cleanup_tools()
+
+        work_dir = self._cli.session.work_dir
+        session_id = self._cli.session.id
+        context_file = self._cli.session.context_file
+        if context_file.exists():
+            context_file.unlink()
+
+        # Clear persisted tool state (e.g. todos) and wire history
+        session_dir = self._cli.session.dir
+        state_file = session_dir / "state.json"
+        if state_file.exists():
+            state_file.unlink()
+        wire_file = self._cli.session.wire_file.path
+        if wire_file.exists():
+            wire_file.unlink()
+
+        # Clear custom data from the old session
+        self._cli.session.custom_data.clear()
+
+        cli_session = await CliSession.create(work_dir, session_id)
+        kwargs = self._create_kwargs.copy()
+        kwargs.pop("resumed", None)
+        kwargs.update(custom_arguments)
+        self._cli = await KimiCLI.create(cli_session, **kwargs)
+        self._cancel_event = None
+        self._closed = False
+
+    async def compact(self, *, custom_instruction: str = "") -> None:
+        """Compact the session context.
+
+        This summarizes older conversation history into a condensed form,
+        reducing token usage while preserving recent messages and essential
+        context.
+
+        Args:
+            custom_instruction: Optional user instruction to guide the
+                compaction focus.
+
+        Raises:
+            SessionStateError: When the session is closed or already running.
+            LLMNotSet: When the LLM is not set.
+            ChatProviderError: When the chat provider returns an error.
+        """
+        if self._closed:
+            raise SessionStateError("Session is closed")
+        if self._cancel_event is not None:
+            raise SessionStateError("Session is already running")
+
+        from kimi_cli.soul import _current_wire
+        from kimi_cli.wire import Wire
+
+        wire = Wire()
+        token = _current_wire.set(wire)
+        try:
+            await self._cli.soul.compact_context(custom_instruction=custom_instruction)
+        finally:
+            _current_wire.reset(token)
+            wire.shutdown()
+
+    async def _cleanup_tools(self) -> None:
+        """Clean up tool resources without marking the session closed."""
+        toolset = getattr(self._cli.soul.agent, "toolset", None)
+        cleanup = getattr(toolset, "cleanup", None)
+        if cleanup is None:
+            return
+        result = cleanup()
+        if inspect.isawaitable(result):
+            await result
+
+    @staticmethod
+    async def create(
+        work_dir: KaosPath | None = None,
+        *,
+        # Basic configuration
+        session_id: str | None = None,
+        config: Config | Path | None = None,
+        model: str | None = None,
+        thinking: bool = False,
+        # Run mode
+        yolo: bool = False,
+        plan_mode: bool = False,
+        # Extensions
+        agent_file: Path | None = None,
+        mcp_configs: list[MCPConfig] | list[dict[str, Any]] | None = None,
+        skills_dir: KaosPath | None = None,
+        skills_dirs: list[KaosPath] | None = None,
+        # Loop control
+        max_steps_per_turn: int | None = None,
+        max_retries_per_step: int | None = None,
+        max_ralph_iterations: int | None = None,
+        **custom_arguments # Add by maxwell
+    ) -> Session:
+        """
+        Create a new Session instance.
+
+        Args:
+            work_dir: Working directory (KaosPath). Defaults to current directory.
+            session_id: Custom session ID (optional).
+            config: Configuration object or path to a config file.
+            model: Model name, e.g. "kimi".
+            thinking: Whether to enable thinking mode (requires model support).
+            yolo: Automatically approve all approval requests.
+            agent_file: Agent specification file path.
+            mcp_configs: MCP server configurations.
+            skills_dir: Single skills directory (KaosPath). Preserved for SDK compatibility.
+            skills_dirs: Multiple skills directories (KaosPath list) for newer kimi-cli.
+            max_steps_per_turn: Maximum number of steps in one turn.
+            max_retries_per_step: Maximum number of retries per step.
+            max_ralph_iterations: Extra iterations in Ralph mode (-1 for unlimited).
+
+        Returns:
+            Session: A new Session instance.
+
+        Raises:
+            FileNotFoundError: When the agent file is not found.
+            ConfigError(KimiCLIException, ValueError): When the configuration is invalid.
+            AgentSpecError(KimiCLIException, ValueError): When the agent specification is invalid.
+            InvalidToolError(KimiCLIException, ValueError): When any tool cannot be loaded.
+            MCPConfigError(KimiCLIException, ValueError): When any MCP configuration is invalid.
+            MCPRuntimeError(KimiCLIException, RuntimeError): When any MCP server cannot be
+                connected.
+        """
+        if work_dir is None:
+            work_dir_path = KaosPath.cwd()
+        else:
+            _ensure_type("work_dir", work_dir, KaosPath)
+            work_dir_path = work_dir
+        resolved_skills_dirs = _resolve_skills_dirs(skills_dir, skills_dirs)
+        cli_session = await CliSession.create(work_dir_path, session_id)
+        llm: LLM | None = None
+        chat_provider: ChatProvider | None = custom_arguments.pop('chat_provider', None)
+        if chat_provider is not None:
+            llm = LLM(chat_provider, 0, set())
+        cli = await KimiCLI.create(
+            cli_session,
+            config=config,
+            model_name=model,
+            thinking=thinking,
+            llm=llm,
+            yolo=yolo,
+            plan_mode=plan_mode,
+            agent_file=agent_file,
+            mcp_configs=mcp_configs,
+            skills_dirs=resolved_skills_dirs,
+            max_steps_per_turn=max_steps_per_turn,
+            max_retries_per_step=max_retries_per_step,
+            max_ralph_iterations=max_ralph_iterations,
+            **custom_arguments
+        )
+        session = Session(cli)
+        session_dir = cli.session.dir
+        state_file = session_dir / "state.json"
+        if state_file.exists():
+            state_file.unlink()
+        session._create_kwargs = {
+            "config": config,
+            "model_name": model,
+            "thinking": thinking,
+            "llm": llm,
+            "yolo": yolo,
+            "plan_mode": plan_mode,
+            "agent_file": agent_file,
+            "mcp_configs": mcp_configs,
+            "skills_dirs": resolved_skills_dirs,
+            "max_steps_per_turn": max_steps_per_turn,
+            "max_retries_per_step": max_retries_per_step,
+            "max_ralph_iterations": max_ralph_iterations,
+        }
+        session._create_kwargs.update(custom_arguments)
+        return session
+
+    @staticmethod
+    async def resume(
+        work_dir: KaosPath,
+        session_id: str | None = None,
+        *,
+        # Basic configuration
+        config: Config | Path | None = None,
+        model: str | None = None,
+        thinking: bool = False,
+        # Run mode
+        yolo: bool = False,
+        plan_mode: bool = False,
+        # Extensions
+        agent_file: Path | None = None,
+        mcp_configs: list[MCPConfig] | list[dict[str, Any]] | None = None,
+        skills_dir: KaosPath | None = None,
+        skills_dirs: list[KaosPath] | None = None,
+        # Loop control
+        max_steps_per_turn: int | None = None,
+        max_retries_per_step: int | None = None,
+        max_ralph_iterations: int | None = None,
+        **custom_arguments # Add by maxwell
+    ) -> Session | None:
+        """
+        Resume an existing session.
+
+        Args:
+            work_dir: Working directory to resume from (KaosPath).
+            session_id: Session ID to resume. If None, resumes the most recent session.
+            config: Configuration object or path to a config file.
+            model: Model name, e.g. "kimi".
+            thinking: Whether to enable thinking mode (requires model support).
+            yolo: Automatically approve all approval requests.
+            agent_file: Agent specification file path.
+            mcp_configs: MCP server configurations.
+            skills_dirs: Skills directories (KaosPath or list of KaosPath).
+            skills_dir: Single skills directory (KaosPath). Preserved for SDK compatibility.
+            skills_dirs: Multiple skills directories (KaosPath list) for newer kimi-cli.
+            max_steps_per_turn: Maximum number of steps in one turn.
+            max_retries_per_step: Maximum number of retries per step.
+            max_ralph_iterations: Extra iterations in Ralph mode (-1 for unlimited).
+
+        Returns:
+            Session | None: The resumed session, or None if not found.
+
+        Raises:
+            FileNotFoundError: When the agent file is not found.
+            ConfigError(KimiCLIException, ValueError): When the configuration is invalid.
+            AgentSpecError(KimiCLIException, ValueError): When the agent specification is invalid.
+            InvalidToolError(KimiCLIException, ValueError): When any tool cannot be loaded.
+            MCPConfigError(KimiCLIException, ValueError): When any MCP configuration is invalid.
+            MCPRuntimeError(KimiCLIException, RuntimeError): When any MCP server cannot be
+                connected.
+        """
+        _ensure_type("work_dir", work_dir, KaosPath)
+        resolved_skills_dirs = _resolve_skills_dirs(skills_dir, skills_dirs)
+        if session_id is None:
+            cli_session = await CliSession.continue_(work_dir)
+        else:
+            cli_session = await CliSession.find(work_dir, session_id)
+        if cli_session is None:
+            return None
+        llm: LLM | None = None
+        chat_provider: ChatProvider | None = custom_arguments.pop('chat_provider', None)
+        if chat_provider is not None:
+            llm = LLM(chat_provider, 0, set())
+        cli = await KimiCLI.create(
+            cli_session,
+            config=config,
+            model_name=model,
+            thinking=thinking,
+            llm=llm,
+            yolo=yolo,
+            plan_mode=plan_mode,
+            agent_file=agent_file,
+            mcp_configs=mcp_configs,
+            skills_dirs=resolved_skills_dirs,
+            max_steps_per_turn=max_steps_per_turn,
+            max_retries_per_step=max_retries_per_step,
+            max_ralph_iterations=max_ralph_iterations,
+            **custom_arguments
+        )
+        session = Session(cli)
+        session._create_kwargs = {
+            "config": config,
+            "model_name": model,
+            "thinking": thinking,
+            "llm": llm,
+            "yolo": yolo,
+            "plan_mode": plan_mode,
+            "agent_file": agent_file,
+            "mcp_configs": mcp_configs,
+            "skills_dirs": resolved_skills_dirs,
+            "max_steps_per_turn": max_steps_per_turn,
+            "max_retries_per_step": max_retries_per_step,
+            "max_ralph_iterations": max_ralph_iterations,
+        }
+        session._create_kwargs.update(custom_arguments)
+        return session
+
+    @property
+    def id(self) -> str:
+        """Session ID."""
+        return self._cli.session.id
+
+    @property
+    def model_name(self) -> str:
+        """Name of the current model."""
+        return self._cli.soul.model_name
+
+    @property
+    def status(self) -> StatusSnapshot:
+        """Current status snapshot (context usage, yolo state, etc.)."""
+        return self._cli.soul.status
+
+    def get_custom_data(self) -> dict[str, Any] | None:
+        # Return the custom data dictionary from the underlying CLI session. Always reset in 'clear' 
+        if self._cli is not None and self._cli.session is not None:
+            return self._cli.session.custom_data
+        return None
+    
+    def get_custom_config(self) -> dict[str, Any] | None:
+        # Return the custom data dictionary from the underlying CLI session.
+        if self._cli is not None and self._cli.session is not None:
+            return self._cli.session.custom_config
+        return None
+
+    async def export(
+        self, output_path: str | Path | None = None
+    ) -> tuple[Path, int]:
+        """Export current session context to a markdown file.
+
+        Args:
+            output_path: Optional output file or directory path. If a directory,
+                a default filename is generated. If not provided, the file is
+                written to the session's work directory.
+
+        Returns:
+            tuple[Path, int]: The output file path and the number of messages exported.
+
+        Raises:
+            SessionStateError: When the session is closed.
+            ValueError: When there are no messages to export or writing fails.
+        """
+        if self._closed:
+            raise SessionStateError("Session is closed")
+
+        from kimi_cli.utils.export import perform_export
+
+        soul = self._cli.soul
+        session = self._cli.session
+        result = await perform_export(
+            history=list(soul.context.history),
+            session_id=session.id,
+            work_dir=str(session.work_dir),
+            token_count=soul.context.token_count,
+            args=str(output_path) if output_path else "",
+            default_dir=Path(str(session.work_dir)),
+        )
+        if isinstance(result, str):
+            raise ValueError(result)
+        return result
+
+    async def prompt(
+        self,
+        user_input: str | list[ContentPart],
+        *,
+        merge_wire_messages: bool = False,
+    ) -> AsyncGenerator[WireMessage, None]:
+        """
+        Send a prompt and get a WireMessage stream.
+
+        Args:
+            user_input: User input, can be plain text or a list of content parts.
+            merge_wire_messages: Whether to merge consecutive Wire messages.
+
+        Yields:
+            WireMessage: Wire messages, including ApprovalRequest.
+
+        Raises:
+            LLMNotSet: When the LLM is not set.
+            LLMNotSupported: When the LLM does not have required capabilities.
+            ChatProviderError: When the LLM provider returns an error.
+            MaxStepsReached: When the maximum number of steps is reached.
+            RunCancelled: When the run is cancelled by the cancel event.
+            SessionStateError: When the session is closed or already running.
+
+        Note:
+            Callers must handle ApprovalRequest manually unless yolo=True.
+        """
+        if isinstance(user_input, str):
+            user_input = sanitize_for_tokenizer(user_input).strip()
+            if not user_input:
+                return
+        elif isinstance(user_input, list):
+            sanitized_parts: list[ContentPart] = []
+            for part in user_input:
+                if isinstance(part, TextPart):
+                    cleaned = sanitize_for_tokenizer(part.text).strip()
+                    if cleaned:
+                        part.text = cleaned
+                        sanitized_parts.append(part)
+                elif isinstance(part, ThinkPart):
+                    cleaned = sanitize_for_tokenizer(part.think).strip()
+                    if cleaned:
+                        part.think = cleaned
+                        sanitized_parts.append(part)
+                else:
+                    sanitized_parts.append(part)
+            user_input = sanitized_parts
+            if not user_input:
+                return
+        if self._closed:
+            raise SessionStateError("Session is closed")
+        if self._cancel_event is not None:
+            raise SessionStateError("Session is already running")
+        cancel_event = asyncio.Event()
+        self._cancel_event = cancel_event
+        try:
+            async with _prompt_semaphore:
+                async for msg in self._cli.run(
+                    user_input,
+                    cancel_event,
+                    merge_wire_messages=merge_wire_messages,
+                ):
+                    yield msg
+        finally:
+            if self._cancel_event is cancel_event:
+                self._cancel_event = None
+
+    def cancel(self) -> None:
+        """
+        Cancel the current prompt operation.
+
+        This sets the cancel event used by the underlying KimiCLI.run call and
+        results in RunCancelled being raised from the active prompt coroutine.
+        """
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+
+    async def close(self) -> None:
+        """
+        Close the Session and release resources.
+
+        This cancels any ongoing prompt and cleans up tool resources.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+        await self._cleanup_tools()
+
+    async def __aenter__(self) -> Session:
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        """Async context manager exit."""
+        await self.close()

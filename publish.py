@@ -66,7 +66,6 @@ def bump_version() -> None:
     packages = [
         ("kosong-x", CURRENT_ROOT / "kimi-cli" / "packages" / "kosong" / "pyproject.toml"),
         ("kimi-cli-x", CURRENT_ROOT / "kimi-cli" / "pyproject.toml"),
-        ("kimi-agent-sdk-x", CURRENT_ROOT / "kimi-agent-sdk" / "python" / "pyproject.toml"),
         ("kimix", CURRENT_ROOT / "pyproject.toml"),
     ]
 
@@ -157,7 +156,6 @@ def main() -> None:
     packages = [
         ("kosong-x", "kimi-cli\\packages\\kosong"),
         ("kimi-cli-x", "kimi-cli"),
-        ("kimi-agent-sdk-x", "kimi-agent-sdk\\python"),
         ("根项目", None),
     ]
 
