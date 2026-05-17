@@ -10,7 +10,7 @@
       "kimi_cli.tools.file:ReadFile",
       "kimi_cli.tools.file:Glob",
       "kimi_cli.tools.file:Grep",
-      "kimi_cli.tools.file:StrReplaceFile",
+      "kimi_cli.tools.file:EditFile",
       "kimix.tools.web.fetch_url:FetchURL"
     ]
   }
