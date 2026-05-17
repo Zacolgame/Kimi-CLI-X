@@ -37,8 +37,6 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
                         help='Specify custom skill directory(s)')
     parser.add_argument('--config', type=str, default=None,
                         help='Path to a JSON config file to load as default provider')
-    parser.add_argument('--second_config', type=str, default=None,
-                        help='Path to a JSON config file to load as default sub-provider')
     parser.add_argument('--ralph', nargs='?', const=-1, type=int, default=None,
                         help='Enable Ralph mode (unlimited iterations) or set to specific number')
     args = parser.parse_args()
@@ -124,7 +122,10 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 config_data = json.load(f)
+            sub_provider = config_data.pop('sub_provider', None)
             base.set_default_provider(config_data)
+            if sub_provider and isinstance(sub_provider, dict):
+                base.set_default_sub_provider(sub_provider)
             print_debug(f'{str(config_path)} loaded')
         except json.JSONDecodeError as e:
             print_warning(
@@ -140,60 +141,10 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
         if default_config_path.exists():
             try:
                 config_data = json.loads(default_config_path.read_text(encoding='utf-8'))
+                sub_provider = config_data.pop('sub_provider', None)
                 base.set_default_provider(config_data)
-            except (json.JSONDecodeError, Exception):
-                pass
-    # Handle --second_config argument
-    if args.second_config:
-        second_config_path = Path(args.second_config)
-        found = False
-        if second_config_path.exists() and second_config_path.is_file():
-            found = True
-        else:
-            # Search in parent directories of __file__ recursively
-            file_dir = Path(__file__).resolve().parent
-            for parent in [file_dir, *file_dir.parents]:
-                candidate = parent / second_config_path.name
-                if candidate.exists() and candidate.is_file():
-                    second_config_path = candidate
-                    found = True
-                    break
-        if not found:
-            # Check if second_config_path is inside environment var PATH
-            import os
-            for path_dir in os.environ.get('PATH', '').split(os.pathsep):
-                path_dir = path_dir.strip()
-                if not path_dir:
-                    continue
-                candidate = Path(path_dir) / second_config_path.name
-                if candidate.exists() and candidate.is_file():
-                    second_config_path = candidate
-                    found = True
-                    break
-        if not found:
-            print_error(f'Second config file not found: {str(second_config_path)}')
-            sys.exit(1)
-        second_config_path = second_config_path.resolve()
-        try:
-            with open(second_config_path, 'r', encoding='utf-8') as f:
-                second_config_data = json.load(f)
-            base.set_default_sub_provider(second_config_data)
-            print_debug(f'Sub-provider config loaded from {str(second_config_path)}')
-        except json.JSONDecodeError as e:
-            print_warning(
-                f'Invalid JSON in second config file: {str(second_config_path)} ({e})')
-        except Exception as e:
-            print_warning(
-                f'Failed to load second config file: {str(second_config_path)} ({e})')
-    # Load default second_config.json if no sub-provider has been set yet
-    if base._default_sub_provider is None:
-        default_second_config_path = Path(__file__).parent.parent / "second_config.json"
-        if default_second_config_path.exists():
-            try:
-                with open(default_second_config_path, 'r', encoding='utf-8') as f:
-                    second_config_data = json.load(f)
-                base.set_default_sub_provider(second_config_data)
-                print_debug(f'Default sub-provider config loaded from {str(default_second_config_path)}')
+                if sub_provider and isinstance(sub_provider, dict):
+                    base.set_default_sub_provider(sub_provider)
             except (json.JSONDecodeError, Exception):
                 pass
     # Handle --skill-dir argument

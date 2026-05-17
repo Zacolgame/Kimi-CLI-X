@@ -52,7 +52,6 @@ kimi_default_config = '''
 default_config = kimi_default_config
 
 _DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "default_config.json"
-_SECOND_CONFIG_PATH = Path(__file__).parent.parent / "second_config.json"
 
 _CONTEXT_SIZE_OPTIONS: dict[str, int] = {
     "128k": 131072,
@@ -90,11 +89,6 @@ def _load_default_config() -> dict[str, Any]:
 
 def _save_config(config: dict[str, Any]) -> None:
     with open(_DEFAULT_CONFIG_PATH, "wb") as f:
-        f.write(orjson.dumps(config, option=orjson.OPT_INDENT_2))
-
-
-def _save_second_config(config: dict[str, Any]) -> None:
-    with open(_SECOND_CONFIG_PATH, "wb") as f:
         f.write(orjson.dumps(config, option=orjson.OPT_INDENT_2))
 
 
@@ -269,11 +263,7 @@ def _ask_sub_provider(defaults: dict[str, Any] | None = None) -> dict[str, Any] 
 
     # Ensure loop_control for sub-provider disables ralph
     sub["loop_control"] = {
-        "max_steps_per_turn": 5000,
-        "max_retries_per_step": 3,
         "max_ralph_iterations": 0,
-        "reserved_context_size": 50000,
-        "compaction_trigger_ratio": 0.85,
     }
 
     sub["name"] = model_type
@@ -332,19 +322,17 @@ def init(initialize: bool = True) -> None:
             url = _ask_url(config.get("url", "https://api.kimi.com/coding/v1"))
             config["url"] = url
 
-            sub_provider = _ask_sub_provider(config)
+            sub_provider = _ask_sub_provider(config.get("sub_provider"))
             if sub_provider is not None:
-                _save_second_config(sub_provider)
-            elif _SECOND_CONFIG_PATH.exists():
-                _SECOND_CONFIG_PATH.unlink()
+                config["sub_provider"] = sub_provider
+            elif "sub_provider" in config:
+                del config["sub_provider"]
     except KeyboardInterrupt:
         print_warning('keyboard interruped.')
         return
     _save_config(config)
     if initialize:
         print_success(f"Configuration saved successfully to {_DEFAULT_CONFIG_PATH}.")
-        if _SECOND_CONFIG_PATH.exists():
-            print_success(f"Sub-provider configuration saved to {_SECOND_CONFIG_PATH}.")
     if sys.platform == "win32":
         os.startfile(str(_DEFAULT_CONFIG_PATH))
     elif sys.platform == "darwin":
