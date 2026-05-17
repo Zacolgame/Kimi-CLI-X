@@ -2,7 +2,7 @@
     "model_name": "my-model",
     "name": "my-name",
     "model": "minimax-m2.7",
-    "max_context_size": 200000,
+    "max_context_size": 204800,
     "capabilities": [
         "thinking"
     ],

@@ -392,7 +392,14 @@ class KimixAsyncClient:
         )
 
     async def close(self) -> None:
-        await self._client.aclose()
+        try:
+            await self._client.aclose()
+        except RuntimeError as exc:
+            # Transports bound to a now-closed ProactorEventLoop (Windows
+            # Python 3.14) raise RuntimeError('Event loop is closed').
+            # The OS will reclaim the socket, so we swallow it.
+            if "Event loop is closed" not in str(exc):
+                raise
 
     async def __aenter__(self) -> "KimixAsyncClient":
         return self

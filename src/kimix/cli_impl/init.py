@@ -9,7 +9,33 @@ from typing import Any
 import orjson
 
 from kimix.base import print_info, print_success, print_warning
-default_config = '''
+deepseek_default_config = '''
+{
+    "model_name": "ds-model",
+    "name": "ds",
+    "model": "deepseek-v4-pro",
+    "max_context_size": 1048576,
+    "capabilities": ["thinking"],
+    "url": "https://api.deepseek.com/",
+    "type": "openai_legacy",
+    "max_tokens": 384000,
+    "thinking_effort": "max"
+}
+'''
+minimax_default_config = '''
+{
+    "model_name": "minimax-model",
+    "name": "minimax",
+    "model": "minimax-m2.7",
+    "max_context_size": 204800,
+    "capabilities": ["thinking"],
+    "url": "https://api.minimaxi.com/anthropic",
+    "type": "anthropic",
+    "max_tokens": 128000,
+    "thinking_effort": "max"
+}
+'''
+kimi_default_config = '''
 {
     "model_name": "kimi-for-coding",
     "name": "moonshot",
@@ -20,10 +46,11 @@ default_config = '''
     "type": "kimi",
     "max_tokens": 131072,
     "show_thinking_stream": true,
-    "thinking_effort": "max",
-    "temperature": 1.0
+    "thinking_effort": "max"
 }
 '''
+default_config = kimi_default_config
+
 _DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "default_config.json"
 _SECOND_CONFIG_PATH = Path(__file__).parent.parent / "second_config.json"
 
@@ -53,8 +80,11 @@ _VALID_CAPABILITIES = ("thinking", "always_thinking", "image_in", "video_in")
 
 def _load_default_config() -> dict[str, Any]:
     if _DEFAULT_CONFIG_PATH.exists():
-        with open(_DEFAULT_CONFIG_PATH, "rb") as f:
-            return orjson.loads(f.read())
+        try:
+            with open(_DEFAULT_CONFIG_PATH, "rb") as f:
+                return orjson.loads(f.read())
+        except:
+            pass
     return orjson.loads(default_config)
 
 
@@ -72,6 +102,16 @@ def _ask(prompt: str, default: str) -> str:
     print_info(f"{prompt} [{default}]: ", end="")
     value = input().strip()
     return value if value else default
+
+
+def _ask_template() -> str:
+    print_info("Select provider template ('kimi', 'deepseek' or 'minimax') [kimi]: ", end="")
+    choice = input().strip().lower()
+    if choice == 'deepseek':
+        return deepseek_default_config
+    if choice == 'minimax':
+        return minimax_default_config
+    return kimi_default_config
 
 
 def _ask_model_name(default: str = "kimi-for-coding") -> str:
@@ -104,7 +144,15 @@ def _ask_api_key() -> str:
     return value
 
 
-def _ask_context_size(default: str = "256k") -> int:
+def _ask_context_size(config: dict[str, Any] | None = None) -> int:
+    default = "256k"
+    if config is not None:
+        max_ctx = config.get("max_context_size")
+        if max_ctx is not None:
+            for k, v in _CONTEXT_SIZE_OPTIONS.items():
+                if v == max_ctx:
+                    default = k
+                    break
     options_str = ", ".join(_CONTEXT_SIZE_OPTIONS.keys())
     while True:
         value = _ask(f"Enter model context size ({options_str} or a number)", default)
@@ -153,22 +201,6 @@ def _ask_url(default: str = "https://api.kimi.com/coding/v1") -> str:
     return _ask("Enter model URL", default)
 
 
-def _ask_temperature(default: float = 1.0) -> float:
-    while True:
-        value = _ask("Enter temperature", str(default)).strip()
-        if not value:
-            return default
-        try:
-            num = float(value)
-        except ValueError:
-            print_warning(f"Invalid number '{value}', using default {default}")
-            return default
-        if num < 0.0 or num > 2.0:
-            print_warning(f"Value {num} out of range [0.0, 2.0], using default {default}")
-            return default
-        return num
-
-
 def _ask_max_token(context_size: int, reserved: int, default: int) -> int:
     max_allowed = context_size - reserved
     prompt = f"Enter max tokens (max {max_allowed})"
@@ -215,12 +247,7 @@ def _ask_sub_provider(defaults: dict[str, Any] | None = None) -> dict[str, Any] 
     api_key = _ask_api_key()
     sub["api_key"] = api_key
 
-    temperature = _ask_temperature(_default("temperature", 1.0))
-    sub["temperature"] = temperature
-
-    ctx_default = _default("max_context_size", 262144)
-    ctx_str = _CONTEXT_SIZE_BY_INT.get(ctx_default, "256k")
-    context_size = _ask_context_size(ctx_str)
+    context_size = _ask_context_size(defaults)
     sub["max_context_size"] = context_size
 
     thinking = _ask_thinking_effort("off")
@@ -260,8 +287,11 @@ def init(initialize: bool = True) -> None:
     if not initialize:
         v = input('default config not found, initialize? you can use /init any time. (y/n)').strip().lower() 
         initialize = v == 'y' or not v
+    template = default_config
+    if initialize:
+        template = _ask_template()
     config = _load_default_config()
-    defaults = orjson.loads(default_config)
+    defaults = orjson.loads(template)
     # Merge loaded config over defaults so missing keys are filled in
     for key, value in defaults.items():
         if key not in config:
@@ -281,11 +311,11 @@ def init(initialize: bool = True) -> None:
             api_key = _ask_api_key()
             config["api_key"] = api_key
 
-            context_size = _ask_context_size()
+            context_size = _ask_context_size(config)
             config["max_context_size"] = context_size
 
             reserved = config.get("loop_control", {}).get("reserved_context_size", 50000)
-            max_tokens = _ask_max_token(context_size, reserved, 131072)
+            max_tokens = _ask_max_token(context_size, reserved, config.get('max_tokens', 128000))
             config["max_tokens"] = max_tokens
 
             thinking = _ask_thinking_effort(config.get("thinking_effort", "low"))
@@ -301,9 +331,6 @@ def init(initialize: bool = True) -> None:
 
             url = _ask_url(config.get("url", "https://api.kimi.com/coding/v1"))
             config["url"] = url
-
-            temperature = _ask_temperature(config.get("temperature", 1.0))
-            config["temperature"] = temperature
 
             sub_provider = _ask_sub_provider(config)
             if sub_provider is not None:
