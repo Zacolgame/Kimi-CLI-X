@@ -9,7 +9,7 @@ from kimix.base import print_success, print_error, print_warning, print_debug, c
 from kimix.utils import (
     clear_default_context, get_default_session, fix_error, compact_default_context,
     print_usage, execute_plan, check_plan_cache, set_ralph_loop,
-    _create_default_session
+    _create_default_session, close_session
 )
 import kimix.utils._globals as _globals
 from .init import init
@@ -305,6 +305,29 @@ def _cmd_init(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     return None, False
 
 
+def _cmd_supervisor(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
+    if len(task_split) < 2:
+        print_error('Command must be /supervisor:on or /supervisor:off')
+        return None, False
+    val = task_split[1].strip().lower()
+    if val == 'on':
+        base.set_default_supervisor(True)
+        print_success('Supervisor mode ON.')
+    elif val == 'off':
+        base.set_default_supervisor(False)
+        print_success('Supervisor mode OFF.')
+    else:
+        print_error('Command must be /supervisor:on or /supervisor:off')
+        return None, False
+    session = get_default_session()
+    if session:
+        close_session(session)
+    _globals._default_session = None
+    _globals._default_role = None
+    _create_default_session()
+    return None, False
+
+
 def _cmd_unknown(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     print_warning('Unrecognized command.')
     return None, False
@@ -328,5 +351,6 @@ _command_map = {
     'swarm': _cmd_swarm,
     'ralph': _cmd_ralph,
     'cot': _cmd_cot,
+    'supervisor': _cmd_supervisor,
     'init': _cmd_init
 }

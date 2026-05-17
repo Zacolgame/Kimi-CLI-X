@@ -7,6 +7,7 @@ import anyio
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from kimi_cli.session import Session
 from pydantic import BaseModel, Field
+from kimi_cli.tools import SkipThisTool
 
 MAGIC_SPLIT_STR = '\n>>>>>>>>>>9fbf5c1387a34\n'
 
@@ -28,7 +29,8 @@ class Params(BaseModel):
         description="Note content.",
     )
 
-
+import threading
+_enable_note = threading.local()
 class Note(CallableTool2):
     name: str = "Note"
     description: str = 'Append a note to a file.'
@@ -37,6 +39,8 @@ class Note(CallableTool2):
     def __init__(self, session: Session):
         super().__init__()
         self._session = session
+        if getattr(_enable_note, 'value', None) != True:
+            raise SkipThisTool()
 
     async def __call__(self, params: Params) -> ToolReturnValue:
         path: Path | None = self._session.custom_data.get('note_writing_path')

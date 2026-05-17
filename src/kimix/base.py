@@ -344,6 +344,7 @@ _default_provider: dict[str, Any] | None = None
 _default_sub_provider: dict[str, Any] | None = None
 _default_manually_cot: bool = False
 _default_ralph: int | None = None
+_default_supervisor: bool = False
 
 # Common skill directory paths (relative to current working directory)
 COMMON_SKILL_DIRS: list[str] = [
@@ -382,6 +383,11 @@ def set_default_skill_dirs(value: list[Any]) -> None:
 def set_default_manually_cot(value: bool) -> None:
     global _default_manually_cot
     _default_manually_cot = value
+
+
+def set_default_supervisor(value: bool) -> None:
+    global _default_supervisor
+    _default_supervisor = value
 
 
 def set_default_provider(value: dict[str, Any] | None) -> None:

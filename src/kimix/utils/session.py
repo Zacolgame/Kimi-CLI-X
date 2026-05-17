@@ -56,6 +56,9 @@ async def _create_session_async(
     agent_type: SystemPromptType = SystemPromptType.Worker,
     vfs_path: Path | None = None,
     extra_system_prompt: SystemPromptCallback | None = None,
+    max_steps_per_turn: int | None = None,
+    max_retries_per_step: int | None = None,
+    max_ralph_iterations: int | None = None,
 ) -> Session:
     # create cache dir
     if work_dir:
@@ -93,6 +96,9 @@ async def _create_session_async(
             custom_system_prompt=system_prompts,
             chat_provider=chat_provider,
             vfs_path=vfs_path,
+            max_steps_per_turn=max_steps_per_turn,
+            max_retries_per_step=max_retries_per_step,
+            max_ralph_iterations=max_ralph_iterations,
         )
         if not session:
             print_debug(f'Session {session_id} not found.')
@@ -109,6 +115,9 @@ async def _create_session_async(
             custom_system_prompt=system_prompts,
             chat_provider=chat_provider,
             vfs_path=vfs_path,
+            max_steps_per_turn=max_steps_per_turn,
+            max_retries_per_step=max_retries_per_step,
+            max_ralph_iterations=max_ralph_iterations,
         )
     # save config
     custom_config = session.get_custom_config()
@@ -130,7 +139,10 @@ def create_session(
     chat_provider: ChatProvider | None = None,
     agent_type: SystemPromptType = SystemPromptType.Worker,
     vfs_path: Path | None = None,
-    extra_system_prompt: SystemPromptCallback | None = None
+    extra_system_prompt: SystemPromptCallback | None = None,
+    max_steps_per_turn: int | None = None,
+    max_retries_per_step: int | None = None,
+    max_ralph_iterations: int | None = None,
 ) -> Session:
     return asyncio.run(_create_session_async(
         session_id=session_id,
@@ -144,7 +156,10 @@ def create_session(
         chat_provider=chat_provider,
         agent_type=agent_type,
         vfs_path=vfs_path,
-        extra_system_prompt=extra_system_prompt
+        extra_system_prompt=extra_system_prompt,
+        max_steps_per_turn=max_steps_per_turn,
+        max_retries_per_step=max_retries_per_step,
+        max_ralph_iterations=max_ralph_iterations,
     ))
 
 
@@ -192,8 +207,17 @@ def get_default_session() -> Session | None:
 def _create_default_session(resume: bool = True) -> Session:
     if _globals._default_session:
         return _globals._default_session
-    _globals._default_session = create_session(session_id=None, resume=resume)
-    _globals._default_role = SystemPromptType.Worker
+    if base._default_supervisor:
+        _globals._default_session = create_session(
+            session_id=None,
+            resume=resume,
+            agent_type=SystemPromptType.Supervisor,
+            agent_file=base._default_agent_file_dir / 'agent_boss.json',
+        )
+        _globals._default_role = SystemPromptType.Supervisor
+    else:
+        _globals._default_session = create_session(session_id=None, resume=resume)
+        _globals._default_role = SystemPromptType.Worker
     return _globals._default_session
 
 

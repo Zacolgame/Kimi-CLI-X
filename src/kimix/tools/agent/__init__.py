@@ -11,6 +11,10 @@ class SubAgentParams(BaseModel):
     prompt: str = Field(
         description="Task instructions for the sub-agent."
     )
+    session_id: str | None = Field(
+        default=None,
+        description="Optional session ID to resume an existing sub-agent session."
+    )
 
 
 class Agent(CallableTool2):
@@ -33,6 +37,7 @@ class Agent(CallableTool2):
         async with self._semaphore:
             try:
                 output_strs = []
+                sub_session_id: str | None = None
 
                 def output_function(fn: str, is_thinking: bool) -> None:
                     # Main agent no need to get thinking-output
@@ -40,6 +45,7 @@ class Agent(CallableTool2):
                         output_strs.append(fn)
 
                 async def prompt_async(cancel_callable=None):
+                    nonlocal sub_session_id
                     session = None
                     try:
                         import kimix.base as base
@@ -47,16 +53,14 @@ class Agent(CallableTool2):
                         chat_provider = custom_config.get("chat_provider")
                         default_sub_provider = base._default_sub_provider if base._default_sub_provider is not None else base._default_provider
                         provider_dict = dict(default_sub_provider) if default_sub_provider is not None else dict(custom_config.get("provider_dict", {}))
-                        loop_control = provider_dict.get('loop_control')
-                        if isinstance(loop_control, dict):
-                            provider_dict['loop_control'] = {**loop_control, 'max_ralph_iterations': 0}
-                        else:
-                            provider_dict['loop_control'] = {'max_ralph_iterations': 0}
                         session = await _create_session_async(
+                            session_id=params.session_id,
                             agent_file=base._default_agent_file_dir / 'agent_subagent.json', agent_type=SystemPromptType.TrivialSubAgent,
                             provider_dict=provider_dict,
-                            thinking=False,
-                            chat_provider=chat_provider)
+                            chat_provider=chat_provider,
+                            resume=params.session_id is not None,
+                            max_ralph_iterations=0)
+                        sub_session_id = session.id
                         session.get_custom_config()['is_sub_agent'] = True
                         import kimix.utils as utils
                         await utils.prompt_async(prompt_str=params.prompt, session=session, output_function=output_function, info_print=False, cancel_callable=cancel_callable, merge_wire_messages=True)
@@ -68,6 +72,8 @@ class Agent(CallableTool2):
                     return None
 
                 err_msg = await prompt_async()
+                if sub_session_id is not None:
+                    output = f"Session ID: {sub_session_id}\n\n{output}"
                 output = await _maybe_export_output_async('\n'.join(output_strs))
                 if err_msg:
                     return ToolError(output=output, message=err_msg, brief='')
@@ -76,5 +82,5 @@ class Agent(CallableTool2):
                 return ToolError(
                     output="",
                     message=str(exc),
-                    brief="Failed to create session",
+                    brief=f"Failed to create session {str(exc)}",
                 )

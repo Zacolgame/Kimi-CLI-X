@@ -59,11 +59,6 @@ class Search(CallableTool2[IndexerParams]):
                         chat_provider = custom_config.get("chat_provider")
                         default_sub_provider = base._default_sub_provider if base._default_sub_provider is not None else base._default_provider
                         provider_dict = dict(default_sub_provider) if default_sub_provider is not None else dict(custom_config.get("provider_dict", {}))
-                        loop_control = provider_dict.get('loop_control')
-                        if isinstance(loop_control, dict):
-                            provider_dict['loop_control'] = {**loop_control, 'max_ralph_iterations': 0}
-                        else:
-                            provider_dict['loop_control'] = {'max_ralph_iterations': 0}
                         if params.dest_path is not None:
                             valid_paths = []
                             for dp in params.dest_path:
@@ -103,6 +98,7 @@ class Search(CallableTool2[IndexerParams]):
                             provider_dict=provider_dict,
                             chat_provider=chat_provider,
                             thinking=False,
+                            max_ralph_iterations=0
                         )
                         session.get_custom_config()['is_sub_agent'] = True
                         import kimix.utils as utils

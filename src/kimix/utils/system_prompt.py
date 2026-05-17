@@ -19,6 +19,7 @@ class SystemPromptType(Enum):
     SwarmCoordinator = 3
     SkillSearcher = 4,
     TrivialSubAgent = 5
+    Supervisor = 6
 
 
 class SystemPromptCallback:
@@ -51,8 +52,7 @@ def get_system_prompt(
             items.append(
                 'Interactive: `Run` short timeout, then `TaskOutput`/`Input`.')
             items.append('Python: `python -c <code>`.')
-            items.append(
-                'Multi-step: use `SetTodoList`. Finish all before ending.')
+            items.append('Multi-step: use `SetTodoList`. Finish all before ending.')
             if args.KIMI_OS != 'Windows':
                 items.append(f'Shell: {args.KIMI_SHELL}. prefer Use `Run`.')
             else:
@@ -97,8 +97,16 @@ def get_system_prompt(
                 role_doc = 'You are a searcher'
                 items.append('Search, analyze, report concisely.')
             case SystemPromptType.TrivialSubAgent:
-                worker_logic('read-only sub-agent', True)
-                items.append('Read only, Reject write/edit tasks.')
+                worker_logic('terse sub-agent', True)
+            case SystemPromptType.Supervisor:
+                use_agent_md = True
+                use_skills = True
+                role_doc = 'You are a supervisor'
+                items.append('Plan only. Do not implement. use `Agent` instead.')
+                items.append('Multi-step: use `SetTodoList`. Finish all before ending.')
+                items.append("Delegate tasks to worker agents via the `Agent` tool.")
+                items.append("Review outputs, maintain oversight, and integrate results.")
+                items.append('`Search` to search, retrieve skills, docs.')
 
         if use_agent_md and agent_md.is_file():
             agent_md_content = agent_md.read_text(
