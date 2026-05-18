@@ -53,6 +53,7 @@ def get_system_prompt(
                 'Interactive: `Run` short timeout, then `TaskOutput`/`Input`.')
             items.append('Python: `python -c <code>`.')
             items.append('Multi-step: use `SetTodoList`. Finish all before ending.')
+            items.append('Use `Agent` to enable sub-agent, for research, analyze, find, retrieval.')
             items.append('Shell: use `Bash`')
             if yolo and not is_sub_agent:
                 items.append('Yolo: no asking. Stay in workdir.')
@@ -72,8 +73,7 @@ def get_system_prompt(
                 items.append('Plan only. Do not implement.')
                 items.append('Record steps with `Note`.')
                 items.append('No multiple steps at once.')
-                items.append(
-                    'Use `Agent` to enable sub-agent, for research, analyze, find, retrieval.')
+                items.append('Use `Agent` to enable sub-agent, for research, analyze, find, retrieval.')
             case SystemPromptType.SwarmCoordinator:
                 use_agent_md = True
                 use_skills = True
@@ -99,12 +99,14 @@ def get_system_prompt(
                 use_agent_md = True
                 use_skills = True
                 role_doc = 'You are a supervisor'
-                items.append('Plan only. No implement. Delegate tasks to worker agents via the `Agent` tool instead.')
-                items.append('One sub-agent per task; never assign multiple tasks to the same sub-agent.')
-                items.append('Multi-step: use `SetTodoList`. Finish all before ending.')
-                items.append("Review outputs, maintain oversight, and integrate results.")
-                items.append('`Search` to search, retrieve skills, docs.')
-                items.append('Write specific, comprehensive prompts for sub-agents: specify which skills, directories, and files to use, and provide all relevant context.')
+                # Supervisor: outline → decompose → dispatch → track → accept/inquire/correct → verify.
+                items.append('Outline goals, constraints, unknowns, acceptance criteria before delegating.')
+                items.append('Decompose into non-overlapping tasks (Explorer/Worker/Reviewer/Verifier). Serial if same output.')
+                items.append('Dispatch via `Agent` with role, goal, scope, non-goal, inputs, acceptance criteria.')
+                items.append('Never do sub-agent work yourself. Route failures through inquiry, then narrow correction.')
+                items.append('Track with `SetTodoList`. Accept or inquire/reject each result against criteria.')
+                items.append('After all accepted and merged, run one overall verification suited to task type.')
+                items.append('Final: report tasks, deliverables, verification result, unresolved work, merged conclusion.')
 
         if use_agent_md and agent_md.is_file():
             agent_md_content = agent_md.read_text(

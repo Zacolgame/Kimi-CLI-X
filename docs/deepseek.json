@@ -4,9 +4,21 @@
     "model": "deepseek-v4-pro",
     "max_context_size": 1048576,
     "capabilities": ["thinking"],
-    "url": "https://api.deepseek.com/",
-    "type": "openai_legacy",
+    "url": "https://api.deepseek.com/anthropic",
+    "type": "anthropic",
     "api_key": "sk-xxx",
     "max_tokens": 384000,
-    "thinking_effort": "max"
+    "thinking_effort": "max",
+    "sub_provider": {
+        "model_name": "ds-model",
+        "name": "ds",
+        "model": "deepseek-v4-flash",
+        "max_context_size": 1048576,
+        "capabilities": ["thinking"],
+        "url": "https://api.deepseek.com/anthropic",
+        "type": "anthropic",
+        "api_key": "sk-xxx",
+        "max_tokens": 384000,
+        "thinking_effort": "off"
+    }
 }
