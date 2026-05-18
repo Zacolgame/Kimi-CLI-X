@@ -1,4 +1,5 @@
 """Bash command tools implemented in pure Python."""
+from pathlib import Path
 from .alias import Alias
 from .awk import Awk
 from .basename import Basename
@@ -248,4 +249,293 @@ __all__ = [
     "Xz",
     "Yes",
     "Zip",
+    # New bash dispatcher tool and data
+    "Bash",
+    "BashParams",
+    "BASH_COMMANDS",
+    "WINDOWS_ALIASES",
 ]
+
+
+# ============================================================
+# Bash command dispatch tool
+# ============================================================
+
+import queue
+
+from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
+from pydantic import BaseModel, Field
+from kimi_cli.session import Session
+
+from kimix.tools.common import _maybe_export_output_async
+
+# Build the command dispatch map
+BASH_COMMANDS: dict[str, CallableTool2] = {
+    "alias": Alias(),
+    "awk": Awk(),
+    "base64": Base64(),
+    "basename": Basename(),
+    "bc": Bc(),
+    "bunzip2": Bunzip2(),
+    "bzip2": Bzip2(),
+    "cal": Cal(),
+    "cat": Cat(),
+    "chgrp": Chgrp(),
+    "chmod": Chmod(),
+    "chown": Chown(),
+    "cksum": Cksum(),
+    "cmp": Cmp(),
+    "comm": Comm(),
+    "cp": Cp(),
+    "crontab": Crontab(),
+    "csplit": Csplit(),
+    "curl": Curl(),
+    "cut": Cut(),
+    "date": Date(),
+    "dc": Dc(),
+    "df": Df(),
+    "diff": Diff(),
+    "dirname": Dirname(),
+    "du": Du(),
+    "echo": Echo(),
+    "env": Env(),
+    "envsubst": EnvsSubst(),
+    "expand": Expand(),
+    "expr": Expr(),
+    "export": Export(),
+    "factor": Factor(),
+    "false": FalseCmd(),
+    "file": File(),
+    "find": Find(),
+    "fold": Fold(),
+    "fmt": Fmt(),
+    "free": Free(),
+    "fuser": Fuser(),
+    "grep": Grep(),
+    "groups": Groups(),
+    "gunzip": Gunzip(),
+    "gzip": Gzip(),
+    "head": Head(),
+    "hexdump": Hexdump(),
+    "history": History(),
+    "host": Host(),
+    "hostname": Hostname(),
+    "hwclock": Hwclock(),
+    "id": Id(),
+    "ifconfig": Ifconfig(),
+    "install": Install(),
+    "iostat": Iostat(),
+    "ip": Ip(),
+    "kill": Kill(),
+    "killall": Killall(),
+    "ln": Ln(),
+    "ls": Ls(),
+    "lsb_release": LsbRelease(),
+    "lsof": Lsof(),
+    "man": Man(),
+    "md5sum": Md5sum(),
+    "mkdir": Mkdir(),
+    "mkfifo": Mkfifo(),
+    "mktemp": Mktemp(),
+    "mv": Mv(),
+    "netstat": Netstat(),
+    "nl": Nl(),
+    "nslookup": Nslookup(),
+    "od": Od(),
+    "ping": Ping(),
+    "printf": Printf(),
+    "printenv": Printenv(),
+    "ps": Ps(),
+    "pwd": Pwd(),
+    "readlink": Readlink(),
+    "realpath": Realpath(),
+    "renice": Renice(),
+    "rev": Rev(),
+    "rm": Rm(),
+    "rmdir": Rmdir(),
+    "scriptreplay": Scriptreplay(),
+    "sed": Sed(),
+    "seq": Seq(),
+    "sha256sum": Sha256sum(),
+    "shuf": Shuf(),
+    "sleep": Sleep(),
+    "split": Split(),
+    "ss": Ss(),
+    "stat": Stat(),
+    "strings": Strings(),
+    "sw_vers": SwVers(),
+    "systeminfo": Systeminfo(),
+    "tac": Tac(),
+    "tail": Tail(),
+    "tar": Tar(),
+    "test": Test(),
+    "top": Top(),
+    "touch": Touch(),
+    "tr": Tr(),
+    "traceroute": Traceroute(),
+    "trap": Trap(),
+    "tree": Tree(),
+    "true": TrueCmd(),
+    "type": Type(),
+    "ulimit": Ulimit(),
+    "umask": Umask(),
+    "uname": Uname(),
+    "unexpand": Unexpand(),
+    "uniq": Uniq(),
+    "unxz": Unxz(),
+    "unzip": Unzip(),
+    "uptime": Uptime(),
+    "vmstat": Vmstat(),
+    "wc": Wc(),
+    "wget": Wget(),
+    "which": Which(),
+    "who": Who(),
+    "whoami": Whoami(),
+    "xxd": Xxd(),
+    "xz": Xz(),
+    "yes": Yes(),
+    "zip": Zip(),
+}
+
+# Map Windows CMD / PowerShell command names to their bash equivalents.
+WINDOWS_ALIASES: dict[str, str] = {
+    # CMD
+    "dir": "ls",
+    "copy": "cp",
+    "move": "mv",
+    "del": "rm",
+    "erase": "rm",
+    "ren": "mv",
+    "rename": "mv",
+    "type": "cat",
+    "fc": "diff",
+    # PowerShell
+    "Get-ChildItem": "ls",
+    "Copy-Item": "cp",
+    "Move-Item": "mv",
+    "Remove-Item": "rm",
+    "Get-Content": "cat",
+    "Get-Location": "pwd",
+    "Get-Process": "ps",
+    "Select-String": "grep",
+}
+
+# Backward-compatible private aliases
+_BASH_COMMANDS = BASH_COMMANDS
+_WINDOWS_ALIASES = WINDOWS_ALIASES
+
+
+class BashParams(BaseModel):
+    """Parameters for the Bash tool - execute a bash command via built-in Python implementation."""
+
+    cmd: str = Field(
+        description="Bash command name."
+    )
+    args: list[str] = Field(
+        default_factory=list,
+        description="Command arguments."
+    )
+    timeout: int = Field(
+        default=10,
+        ge=3,
+        le=180,
+        description="Timeout in seconds."
+    )
+    output_path: str | None = Field(
+        default=None,
+        description="Output file path."
+    )
+    cwd: str | None = Field(
+        default=None,
+        description="Working directory."
+    )
+
+
+class Bash(CallableTool2[BashParams]):
+    """Execute a bash command using built-in Python implementations, with background task support."""
+
+    name: str = "Bash"
+    description: str = "Execute a bash command using built-in Python implementations (cat, ls, grep, etc.)."
+    params: type[BashParams] = BashParams
+
+    def __init__(self, session: Session):
+        super().__init__()
+        self._session = session
+
+    @classmethod
+    def resolve_command(cls, command: str) -> tuple[str, CallableTool2 | None]:
+        """Resolve a command name to its tool implementation.
+
+        Args:
+            command: The command name (e.g., 'cat', 'dir').
+
+        Returns:
+            A tuple of (resolved_name, tool_instance_or_None).
+        """
+        bash_name = WINDOWS_ALIASES.get(command, command)
+        tool = BASH_COMMANDS.get(bash_name)
+        return bash_name, tool
+
+    async def __call__(self, params: BashParams) -> ToolReturnValue:
+        """Execute the bash command.
+
+        Args:
+            params: The parameters specifying the command and its arguments.
+
+        Returns:
+            ToolOk on success, ToolError on failure or timeout.
+        """
+        from kimix.tools.background.utils import BackgroundStream, generate_task_id, add_task, remove_task_id
+        if " " in params.cmd:
+            parts = params.cmd.split(" ")
+            params.cmd = parts[0]
+            remaining = parts[1:]
+            if remaining:
+                params.args.insert(0, " ".join(remaining))
+        _, bash_tool = self.resolve_command(params.cmd)
+        if bash_tool is None:
+            return ToolError(
+                output=f"Unknown bash command: '{params.cmd}'",
+                message=f"Command '{params.cmd}' is not a recognized bash builtin.",
+                brief="Unknown command"
+            )
+
+        result_holder: list[ToolReturnValue] = []
+
+        async def wrapper(q: queue.Queue[str]) -> bool:
+            try:
+                result = await bash_tool(params)
+                result_holder.append(result)
+                output_str = result.output if isinstance(result.output, str) else str(result.output)
+                q.put_nowait(output_str)
+                return not result.is_error
+            except Exception as e:
+                q.put_nowait(f"\n[Error: {str(e)}]")
+                return False
+
+        stream = BackgroundStream()
+        task_id = generate_task_id(self._session, "bash", params.cmd)
+        await stream.start(wrapper, lambda: None)
+        add_task(self._session, task_id, stream)
+
+        await stream.wait(params.timeout)
+
+        if await stream.thread_is_alive():
+            output = await stream.get_output()
+            return ToolError(
+                output=output or f'Running in background. task_id: `{task_id}`. use `TaskOutput` or `Input`',
+                message="Process timeout",
+                brief="Timeout"
+            )
+
+        remove_task_id(self._session, task_id)
+
+        if result_holder:
+            return result_holder[0]
+
+        output = await stream.pop_output()
+        success = await stream.success()
+        if not success:
+            return ToolError(output=output, message="Command execution failed", brief="Command execution failed")
+        output = await _maybe_export_output_async(output)
+        return ToolOk(output=output)

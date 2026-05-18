@@ -3,6 +3,7 @@
     "extend": "default",
     "tools": [
       "kimix.tools.file.run:Run",
+      "kimix.tools.file.bash:Bash",
       "kimix.tools.file.input:Input",
       "kimix.tools.background:TaskOutput",
       "kimi_cli.tools.file:ReadFile",
