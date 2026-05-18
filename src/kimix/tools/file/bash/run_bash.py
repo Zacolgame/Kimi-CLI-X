@@ -54,8 +54,8 @@ async def run_bash(params: "BashParams | RunParams", session: Session) -> ToolRe
 
         is_process = False
         # check if using python
-        if params.path == 'python':
-            params.path = sys.executable
+        if cmd == 'python':
+            cmd = sys.executable
             is_process = True
         elif os.sep in cmd or "/" in cmd:
             is_process = Path(cmd).is_file()
