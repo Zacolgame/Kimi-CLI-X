@@ -14,7 +14,7 @@ from kimix.tools.file.bash.run_bash import run_bash
 
 class RunParams(BaseModel):
     path: str = Field(
-        description="Executable path or bash command."
+        description="Executable path or basic bash command (e.g. mkdir, rm, cp)."
     )
     args: list[str] = Field(
         default_factory=list,
@@ -38,10 +38,14 @@ class RunParams(BaseModel):
         default=None,
         description="Environment variables to set for the subprocess, in 'KEY=VALUE' format. If no '=' is present, the value is set to '1'."
     )
+    force_bash: bool = Field(
+        default=False,
+        description="If true, skip sub-process detection and directly call run_bash."
+    )
 
 class Run(CallableTool2[RunParams]):
     name: str = "Run"
-    description: str = "Run an executable."
+    description: str = "Run an executable or bash command."
     params: type[RunParams] = RunParams
 
     def __init__(self, session: Session):
@@ -53,6 +57,7 @@ class Run(CallableTool2[RunParams]):
 
 
     async def __call__(self, params: RunParams) -> ToolReturnValue:
+
         # params.path may contain arguments, split it with space, then insert to the start of params.args
         # Try progressively longer prefixes to find an existing file, so paths with spaces are handled.
         if " " in params.path:
@@ -75,14 +80,16 @@ class Run(CallableTool2[RunParams]):
                 remaining = parts[1:]
                 if remaining:
                     params.args.insert(0, " ".join(remaining))
-
+        # If force_bash is set, directly call run_bash without process detection.
+        if params.force_bash:
+            return await run_bash(params, self._session)
         # Check if params.path is a valid process name first (executable in PATH or existing file),
         # then fall back to bash built-in commands.
         import shutil
         import os
 
         is_process = False
-        if params.path == 'python':
+        if (params.path == 'python' and (not Path('./python').exists())) or (params.path == 'python.exe' and (not Path('./python.exe').exists())):
             params.path = sys.executable
             is_process = True
         elif os.sep in params.path or "/" in params.path:

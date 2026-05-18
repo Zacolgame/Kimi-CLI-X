@@ -484,5 +484,12 @@ class Bash(CallableTool2[BashParams]):
         Returns:
             ToolOk on success, ToolError on failure or timeout.
         """
-        from kimix.tools.file.bash.run_bash import run_bash
+        from kimix.tools.file.bash.run_bash import run_bash, split_command
+
+        # Split space-separated cmd into cmd + args, respecting quotes
+        if " " in params.cmd or "\t" in params.cmd:
+            parts = split_command(params.cmd)
+            params.cmd = parts[0]
+            params.args[:0] = parts[1:]
+
         return await run_bash(params, self._session)

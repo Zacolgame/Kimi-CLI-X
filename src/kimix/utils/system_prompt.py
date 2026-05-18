@@ -44,6 +44,7 @@ def get_system_prompt(
         use_agent_md = False
         use_skills = False
         items.append('call tools in parallel.')
+        items.append(f'OS: {args.KIMI_OS}')
         def worker_logic(role: str, is_sub_agent: bool = False):
             nonlocal role_doc, use_agent_md, use_skills
             use_agent_md = True
@@ -51,10 +52,10 @@ def get_system_prompt(
             role_doc = f'You are a {role}'
             items.append(
                 'Interactive: `Run` short timeout, then `TaskOutput`/`Input`.')
+            items.append('No Shell: use `Run`')
             items.append('Python: `python -c <code>`.')
             items.append('Multi-step: use `SetTodoList`. Finish all before ending.')
             items.append('Use `Agent` to enable sub-agent, for research, analyze, find, retrieval.')
-            items.append('Shell: use `Bash`')
             if yolo and not is_sub_agent:
                 items.append('Yolo: no asking. Stay in workdir.')
             if not is_sub_agent:
