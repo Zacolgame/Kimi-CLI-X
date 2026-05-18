@@ -75,8 +75,8 @@ class Agent(CallableTool2):
                     return err_msg_inner
 
                 err_msg = await prompt_async()
+                output = '\n'.join(output_strs)
                 if err_msg:
-                    output = '\n'.join(output_strs)
                     if sub_session_id is not None:
                         output = f"Session ID: {sub_session_id}\n\n{output}"
                     return ToolError(output=output, message=err_msg, brief='sub-agent task failed')
