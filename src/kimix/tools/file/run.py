@@ -2,6 +2,7 @@
 import anyio
 import asyncio
 from pathlib import Path
+import shlex
 import sys
 
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
@@ -14,7 +15,7 @@ from kimix.tools.file.bash.run_bash import run_bash
 
 class RunParams(BaseModel):
     path: str = Field(
-        description="Executable path or basic bash command (e.g. mkdir, rm, cp)."
+        description="Executable path or basic bash command (e.g. ls, mkdir, rm)."
     )
     args: list[str] = Field(
         default_factory=list,
@@ -58,10 +59,13 @@ class Run(CallableTool2[RunParams]):
 
     async def __call__(self, params: RunParams) -> ToolReturnValue:
 
-        # params.path may contain arguments, split it with space, then insert to the start of params.args
+        # params.path may contain arguments, split it respecting quotes, then insert to the start of params.args
         # Try progressively longer prefixes to find an existing file, so paths with spaces are handled.
         if " " in params.path:
-            parts = params.path.split(" ")
+            try:
+                parts = shlex.split(params.path)
+            except ValueError:
+                parts = params.path.split(" ")
             candidate = parts[0]
             for i in range(1, len(parts)):
                 candidate += " " + parts[i]
@@ -73,13 +77,13 @@ class Run(CallableTool2[RunParams]):
                     params.path = candidate
                     remaining = parts[i + 1 :]
                     if remaining:
-                        params.args.insert(0, " ".join(remaining))
+                        params.args = remaining + params.args
                     break
             else:
                 params.path = parts[0]
                 remaining = parts[1:]
                 if remaining:
-                    params.args.insert(0, " ".join(remaining))
+                    params.args = remaining + params.args
         # If force_bash is set, directly call run_bash without process detection.
         if params.force_bash:
             return await run_bash(params, self._session)

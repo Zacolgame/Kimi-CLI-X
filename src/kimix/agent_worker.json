@@ -7,6 +7,7 @@
       "kimix.tools.background:TaskOutput",
       "kimix.tools.skill:Search",
       "kimi_cli.tools.todo:SetTodoList",
+      "kimi_cli.tools.step_mem:StepMemory",
       "kimi_cli.tools.file:WriteFile",
       "kimi_cli.tools.file:ReadFile",
       "kimi_cli.tools.file:Glob",

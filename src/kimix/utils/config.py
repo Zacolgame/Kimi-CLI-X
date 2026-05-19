@@ -1,7 +1,7 @@
 from typing import Any
 import os
 from pathlib import Path
-import json
+import orjson
 import kimix.base as base
 from kimi_cli.config import BackgroundConfig, LoopControl, SecretStr, NotificationConfig, MCPConfig, OAuthRef  # type: ignore[attr-defined]
 from kimi_agent_sdk import Config
@@ -30,7 +30,7 @@ def _create_config(provider_dict: dict[str, Any] | None = None) -> tuple[Config,
         return value.startswith(start_with)
     if provider_dict is None:
         try:
-            provider_dict = json.loads(
+            provider_dict = orjson.loads(
                 (Path(__file__).parent.parent / 'default_config.json').read_text(encoding='utf-8', errors='replace'))
             if type(provider_dict) != dict:
                 provider_dict = None

@@ -1,7 +1,7 @@
 from string import Template
 from typing import Any, Callable, Optional
 import asyncio
-import json
+import orjson
 import hashlib
 from pathlib import Path
 from kimi_agent_sdk import Session
@@ -25,7 +25,7 @@ class PlanLoader:
     def load(self) -> None:
         if self.file_path.exists():
             with open(self.file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+                data = orjson.loads(f.read())
             self.steps_count = data.get('steps_count', 0)
             self.plan_file_path = data.get('plan_file_path', '')
             self.plan_file_hash = data.get('plan_file_hash', '')
@@ -48,7 +48,7 @@ class PlanLoader:
             'finished_step_count': self.finished_step_count,
         }
         with open(self.file_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+            f.write(orjson.dumps(data, option=orjson.OPT_INDENT_2).decode('utf-8'))
 
     @staticmethod
     def compute_file_hash(file_path: str | Path) -> str:
