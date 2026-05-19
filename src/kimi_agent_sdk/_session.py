@@ -509,18 +509,11 @@ class Session:
             self._cancel_event.set()
         await self._cleanup_tools()
         if getattr(self, "_anonymous", False):
-            context_file = self._cli.session.context_file
-            if context_file.exists():
-                context_file.unlink()
-            session_dir = self._cli.session.dir
-            state_file = session_dir / "state.json"
-            if state_file.exists():
-                state_file.unlink()
-
-    async def delete(self) -> None:
-        """Delete the session and remove its directory."""
-        await self.close()
-        await self._cli.session.delete()
+            await self._cli.session.delete()
+            
+    def __del__(self):
+        if getattr(self, "_anonymous", False):
+            self._cli.session.delete_sync()
 
     async def __aenter__(self) -> Session:
         """Async context manager entry."""
