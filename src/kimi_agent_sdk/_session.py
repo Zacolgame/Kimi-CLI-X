@@ -483,6 +483,8 @@ class Session:
         finally:
             if self._cancel_event is cancel_event:
                 self._cancel_event = None
+            self._cli.session.state.todos.clear()
+            self._cli.session.save_state()
 
     def cancel(self) -> None:
         """
