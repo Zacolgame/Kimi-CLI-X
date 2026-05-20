@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 import shlex
 import sys
+import tempfile
 
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from pydantic import BaseModel, Field
@@ -86,9 +87,11 @@ class Run(CallableTool2[RunParams]):
         import os
 
         is_process = False
+        is_py = False
         if (params.path == 'python' and (not Path('./python').exists())) or (params.path == 'python.exe' and (not Path('./python.exe').exists())):
             params.path = sys.executable
             is_process = True
+            is_py = True
         elif os.sep in params.path or "/" in params.path:
             # Contains path separator - check if it's an existing file
             is_process = Path(params.path).is_file()
@@ -110,6 +113,18 @@ class Run(CallableTool2[RunParams]):
                     message=f"Command not found: '{params.path}' is not a valid executable or bash built-in command.",
                     brief="Command not found"
                 )
+
+        script_path: str | None = None
+
+        # Handle extremely long python -c scripts via temp file (Windows CreateProcessW ~32767 limit)
+        if is_py:
+            c_idx = next((i for i, a in enumerate(params.args) if a == '-c'), None)
+            if c_idx is not None and c_idx + 1 < len(params.args) and len(params.args[c_idx + 1]) > 30000:
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+                    f.write(params.args[c_idx + 1])
+                    script_path = f.name
+                # Replace -c <code> with <script_path>, preserving leading options and trailing args
+                params.args = params.args[:c_idx] + [script_path] + params.args[c_idx + 2:]
 
         async with self._semaphore:
             env_dict: dict[str, str] | None = None
@@ -141,6 +156,13 @@ class Run(CallableTool2[RunParams]):
 
             # Get output
             output = await task.stream.pop_output() if task.stream else ""
+
+            # Clean up temp file since process has finished
+            if script_path is not None:
+                try:
+                    os.remove(script_path)
+                except Exception:
+                    pass
 
             # Handle output export if needed
             if params.output_path:
