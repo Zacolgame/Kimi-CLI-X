@@ -1,10 +1,39 @@
 import asyncio
 import codecs
+import io
 import os
+import re
 from pathlib import Path
 import queue
 import threading
 from typing import TYPE_CHECKING
+
+# Common error keywords for detecting error lines in process output
+_ERROR_KEYWORDS = [
+    "error", "exception", "traceback", "failed", "failure",
+    "fatal", "panic", "abort", "assertion", "undefined",
+    "syntaxerror", "typeerror", "valueerror", "keyerror",
+    "importerror", "modulenotfounderror", "attributeerror",
+    "nameerror", "runtimeerror", "oserror", "ioerror",
+    "zerodivisionerror", "indexerror", "memoryerror",
+    "recursionerror", "unboundlocalerror", "referenceerror",
+    "permission denied", "access denied", "not found",
+    "cannot find", "does not exist", "no such file",
+    "connection refused", "timeout", "unhandled",
+]
+
+_ERROR_PATTERN = re.compile(
+    r'\b(?:' + '|'.join(re.escape(k) for k in _ERROR_KEYWORDS) + r')\b',
+    re.IGNORECASE
+)
+
+
+def _find_error_line_index(output: str) -> int | None:
+    """Find the 1-based line index of the first line containing a common error keyword."""
+    for idx, line in enumerate(output.splitlines(), start=1):
+        if _ERROR_PATTERN.search(line):
+            return idx
+    return None
 
 from kimi_cli.session import Session
 
@@ -141,6 +170,7 @@ class ProcessTask:
     async def _run_process_bg(self, q: queue.Queue[str]) -> bool:
         """Run the process and collect output into the queue."""
         process = None
+        output_buffer = io.StringIO()
         try:
             if self._stop_event.is_set():
                 return False
@@ -174,10 +204,12 @@ class ProcessTask:
                             char = decoder.decode(data)
                             if char:
                                 q.put_nowait(char)
+                                output_buffer.write(char)
                         else:
                             char = decoder.decode(b'', final=True)
                             if char:
                                 q.put_nowait(char)
+                                output_buffer.write(char)
                             break
                 except (IOError, OSError, ValueError, asyncio.CancelledError):
                     pass
@@ -194,11 +226,15 @@ class ProcessTask:
                         if data:
                             text = decoder.decode(data)
                             if text:
-                                q.put_nowait("[stderr] " + text)
+                                msg = "[stderr] " + text
+                                q.put_nowait(msg)
+                                output_buffer.write(msg)
                         else:
                             text = decoder.decode(b'', final=True)
                             if text:
-                                q.put_nowait("[stderr] " + text)
+                                msg = "[stderr] " + text
+                                q.put_nowait(msg)
+                                output_buffer.write(msg)
                             break
                 except (IOError, OSError, ValueError, asyncio.CancelledError):
                     pass
@@ -265,14 +301,19 @@ class ProcessTask:
             try:
                 remaining_stdout = await process.stdout.read()
                 if remaining_stdout:
-                    q.put_nowait(remaining_stdout.decode('utf-8', errors='replace'))
+                    text = remaining_stdout.decode('utf-8', errors='replace')
+                    q.put_nowait(text)
+                    output_buffer.write(text)
             except (IOError, OSError, ValueError):
                 pass
             if process.stderr is not None:
                 try:
                     remaining_stderr = await process.stderr.read()
                     if remaining_stderr:
-                        q.put_nowait("[stderr] " + remaining_stderr.decode('utf-8', errors='replace'))
+                        text = remaining_stderr.decode('utf-8', errors='replace')
+                        msg = "[stderr] " + text
+                        q.put_nowait(msg)
+                        output_buffer.write(msg)
                 except (IOError, OSError, ValueError):
                     pass
             # Report completion status
@@ -281,7 +322,12 @@ class ProcessTask:
                 q.put_nowait("\n[Process stopped by user]")
                 return False
             elif return_code is not None and return_code != 0:
-                q.put_nowait(f"\n[Process exited with code {return_code}]")
+                full_output = output_buffer.getvalue()
+                error_line = _find_error_line_index(full_output)
+                if error_line is not None:
+                    q.put_nowait(f"\n[Process exited with code {return_code}, error at line {error_line}]")
+                else:
+                    q.put_nowait(f"\n[Process exited with code {return_code}]")
                 return False
             return True
 

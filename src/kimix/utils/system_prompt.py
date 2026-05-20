@@ -59,7 +59,7 @@ def get_system_prompt(
                 items.append('Yolo: no asking. Stay in workdir.')
             if not is_sub_agent:
                 items.append('`Search` to search, retrieve skills, docs.')
-                items.append('Remember: Drop context aggressively, write memory to dir `.kimix_cache/` after task.')
+                items.append('Drop context aggressively, use `StepMemory` to manage memory.')
         if extra_system_prompt and extra_system_prompt.role_callback:
             extra_system_prompt.role_callback(agent_role, items)
 
