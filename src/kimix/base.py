@@ -26,6 +26,13 @@ from kimi_cli.wire.types import (
 _threads: list[threading.Thread] = []
 
 
+class MessageType(Enum):
+    """Message type for print_agent_json output function."""
+    Text = "text"
+    Thinking = "thinking"
+    ToolCalling = "tool_calling"
+
+
 class Color(Enum):
     """ANSI color codes for foreground colors."""
     BLACK = 30
@@ -190,8 +197,17 @@ toolset.print_tool_func = print_tool
 _TOOL_TYPES = (ToolCall, ToolCallPart, ToolResult)
 
 
+def _format_tool_result(result: ToolResult) -> str:
+    """Format a ToolResult for the output function."""
+    rv = result.return_value
+    brief = rv.brief if rv.brief else ""
+    if brief:
+        return f"{rv.message} ({brief})" if rv.message else brief
+    return rv.message or ""
+
+
 def print_agent_json(
-    wire_msg: Any, output_function: Callable[[str, bool], Any] | None = None
+    wire_msg: Any, output_function: Callable[[str, MessageType], Any] | None = None
 ) -> None:
     def _set_last_ended_with_newline(ended: bool) -> None:
         global PRINT_STREAM_last_ended_with_newline
@@ -229,7 +245,7 @@ def print_agent_json(
             if _switch("think"):
                 think_content = f"[Think] {think_content}"
             if output_function:
-                output_function(think_content, True)
+                output_function(think_content, MessageType.Thinking)
             colorful_print(think_content, fg=Color.BRIGHT_CYAN, end="")
             _set_last_ended_with_newline(think_content.endswith("\n"))
         return
@@ -239,13 +255,24 @@ def print_agent_json(
         if chunk.strip():
             _switch("text")
             if output_function:
-                output_function(chunk, False)
+                output_function(chunk, MessageType.Text)
             _print_func(chunk, end="")
             _set_last_ended_with_newline(chunk.endswith("\n"))
         return
 
     if isinstance(wire_msg, _TOOL_TYPES):
         _switch("tool")
+        if output_function:
+            if isinstance(wire_msg, ToolCall):
+                formatted = f"[ToolCall] {wire_msg.function.name}"
+            elif isinstance(wire_msg, ToolCallPart):
+                formatted = wire_msg.arguments_part or ""
+            elif isinstance(wire_msg, ToolResult):
+                formatted = f"[ToolResult] {_format_tool_result(wire_msg)}"
+            else:
+                formatted = str(wire_msg)
+            if formatted:
+                output_function(formatted, MessageType.ToolCalling)
         return
 
 

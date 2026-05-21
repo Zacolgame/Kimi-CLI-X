@@ -1,5 +1,5 @@
 from string import Template
-from kimix.base import print_warning
+from kimix.base import MessageType, print_warning
 from kimi_agent_sdk import Session
 from kimix.utils import *
 import kimix.base as base
@@ -25,8 +25,8 @@ async def summarize(temp_file: str | None = None, session: Session | None = None
     from kimix.base import generate_memory
     lines = []
 
-    def export_func(text: str, is_thinking: bool):
-        if not is_thinking:
+    def export_func(text: str, msg_type: MessageType):
+        if msg_type != MessageType.Thinking:
             lines.append(text)
     await prompt_async(generate_memory, session=session, info_print=False, output_function=export_func, merge_wire_messages=True)
     if lines:

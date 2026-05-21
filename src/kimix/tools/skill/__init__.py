@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 from typing import override
 from kimi_cli.session import Session
 
+from kimix.base import MessageType, get_skill_dirs
 from kimix.utils import close_session_async, _create_session_async
-from kimix.base import get_skill_dirs
 from kimix.utils.system_prompt import SystemPromptType, SystemPromptCallback
 
 
@@ -46,8 +46,8 @@ class Search(CallableTool2[IndexerParams]):
             try:
                 output_strs = []
 
-                def output_function(fn: str, is_thinking: bool) -> None:
-                    if fn and not is_thinking:
+                def output_function(fn: str, msg_type: MessageType) -> None:
+                    if fn and msg_type != MessageType.Thinking:
                         output_strs.append(fn)
 
                 async def prompt_async(cancel_callable=None):

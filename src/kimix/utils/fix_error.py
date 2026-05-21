@@ -1,6 +1,6 @@
 from typing import Optional, Any, Callable
 from kimi_agent_sdk import Session
-from kimix.base import print_success, run_process_with_error_async, run_thread
+from kimix.base import MessageType, print_success, run_process_with_error_async, run_thread
 from .prompt import prompt, prompt_async
 from .session import _create_default_session
 import asyncio
@@ -54,7 +54,7 @@ def async_prompt(
     prompt_str: str,
     session: Session | None = None,
     # settings
-    output_function: Callable[[str, bool], Any] | None = None,
+    output_function: Callable[[str, MessageType], Any] | None = None,
     info_print: bool = True,
     cancel_callable: Callable[[], bool] | None = None,
 ) -> Any:

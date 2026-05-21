@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from kimi_agent_sdk import Session
+from kimix.base import MessageType
 from kimix.utils import (
     _create_session_async,
     create_session,
@@ -89,8 +90,8 @@ async def _ensure_cot_session_async() -> Session:
 
 def _prompt_to_text(prompt_str: str, session: Session) -> str:
     lst: list[str] = []
-    def output_func(s: str, thinking: bool) -> None:
-        if not thinking:
+    def output_func(s: str, msg_type: MessageType) -> None:
+        if msg_type != MessageType.Thinking:
             lst.append(s)
     prompt(prompt_str, session=session, output_function=output_func, merge_wire_messages=False)
     return "\n".join(lst)
@@ -98,8 +99,8 @@ def _prompt_to_text(prompt_str: str, session: Session) -> str:
 
 async def _prompt_to_text_async(prompt_str: str, session: Session) -> str:
     lst: list[str] = []
-    def output_func(s: str, thinking: bool) -> None:
-        if not thinking:
+    def output_func(s: str, msg_type: MessageType) -> None:
+        if msg_type != MessageType.Thinking:
             lst.append(s)
     await prompt_async(prompt_str, session=session, output_function=output_func, merge_wire_messages=False)
     return "".join(lst)

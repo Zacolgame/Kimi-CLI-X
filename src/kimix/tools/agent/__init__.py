@@ -2,6 +2,7 @@ import asyncio
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from pydantic import BaseModel, Field
 from kimi_cli.session import Session
+from kimix.base import MessageType
 from kimix.utils import close_session_async, _create_session_async
 from kimix.utils.system_prompt import SystemPromptType
 
@@ -38,8 +39,8 @@ class Agent(CallableTool2):
                 output_strs = []
                 sub_session_id: str | None = None
 
-                def output_function(fn: str, is_thinking: bool) -> None:
-                    if fn and not is_thinking:
+                def output_function(fn: str, msg_type: MessageType) -> None:
+                    if fn and msg_type != MessageType.Thinking:
                         output_strs.append(fn)
 
                 async def prompt_async(cancel_callable=None):

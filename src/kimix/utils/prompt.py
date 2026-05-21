@@ -7,7 +7,7 @@ from pathlib import Path
 from kimi_agent_sdk import Session
 import kimix.base as base
 from kimix.utils.system_prompt import SystemPromptType
-from kimix.base import print_debug, print_warning, print_error, print_agent_json, print_info
+from kimix.base import MessageType, print_debug, print_warning, print_error, print_agent_json, print_info
 from . import _globals
 from .session import close_session_async, _create_default_session, _print_usage, clear_default_context, create_session, close_session
 from kimix.tools.common import _export_to_temp_file
@@ -86,7 +86,7 @@ async def prompt_async(
     prompt_str: str,
     session: Session | None = None,
     # settings
-    output_function: Callable[[str, bool], Any] | None = None,
+    output_function: Callable[[str, MessageType], Any] | None = None,
     info_print: bool = True,
     cancel_callable: Callable[[], bool] | None = None,
     close_session_after_prompt: bool = False,
@@ -155,7 +155,7 @@ def prompt(
     prompt_str: str,
     session: Session | None = None,
     # settings
-    output_function: Callable[[str, bool], Any] | None = None,
+    output_function: Callable[[str, MessageType], Any] | None = None,
     info_print: bool = True,
     cancel_callable: Callable[[], bool] | None = None,
     close_session_after_prompt: bool = False,

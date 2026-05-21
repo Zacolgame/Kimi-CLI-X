@@ -17,10 +17,11 @@ import tempfile
 import threading
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, cast
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
+from kimix.base import MessageType
 from kimix.dag.agent_swarm import execute_swarm, merge_vfs_paths, _ALL_VFS_PATH
 from kimix.dag import DAG
 from kimix.utils import SystemPromptType
@@ -76,9 +77,8 @@ async def mock_prompt_async(
     session: MockSession | None = None,
     **kwargs: Any,
 ) -> None:
-    from typing import Callable, cast
-    output_function: Callable[[str, bool], None] | None = cast(
-        Callable[[str, bool], None] | None, kwargs.get("output_function")
+    output_function: Callable[[str, MessageType], None] | None = cast(
+        Callable[[str, MessageType], None] | None, kwargs.get("output_function")
     )
     info_print = kwargs.get("info_print", True)
 
@@ -109,7 +109,7 @@ async def mock_prompt_async(
                 "def mul(a, b):\n"
                 "    return a * b\n"
             )
-            output_function(merged, False)
+            output_function(merged, MessageType.Text)
         return
 
     if prompt_str and info_print:

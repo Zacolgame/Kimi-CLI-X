@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from kimi_agent_sdk import Session
+from kimix.base import MessageType
 from kimix.utils.session import _create_session_async, close_session_async
 from kimix.utils.prompt import prompt_async
 from kimi_cli.vfs.core import VFS, merge
@@ -119,8 +120,8 @@ async def merge_vfs_paths(finalize_prompt_str: str) -> Path | None:
                 conflict_prompt += f"\nProduce the final merged content for `{rel_path}`. Output only the file content, no explanations."
 
                 lines = []
-                def capture(text: str, is_thinking: bool) -> None:
-                    if not is_thinking:
+                def capture(text: str, msg_type: MessageType) -> None:
+                    if msg_type != MessageType.Thinking:
                         lines.append(text)
 
                 await prompt_async(conflict_prompt, session, info_print=False, output_function=capture)

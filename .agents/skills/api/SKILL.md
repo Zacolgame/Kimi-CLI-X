@@ -248,10 +248,10 @@ from kimix.base import print_agent_json
 # - CompactionBegin: prints "Compacting..." info message
 # - ThinkPart: prints thinking content in cyan (suppressed if _quiet)
 # - TextPart: prints text chunks directly
-# - ToolCall, ToolCallPart, ToolResult: silent stream flag switch
+# - ToolCall, ToolCallPart, ToolResult: calls output_function with MessageType.ToolCalling
 print_agent_json(
     wire_msg=message,
-    output_function=custom_handler  # Optional: callback(text, is_think) for text/think content
+    output_function=custom_handler  # Optional: callback(text, MessageType) for text/think/tool content
 )
 ```
 
