@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import orjson
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -46,6 +47,20 @@ def _resolve_skills_dirs(
         resolved.extend(skills_dirs)
 
     return resolved or None
+
+
+async def _load_config_json(work_dir: KaosPath) -> dict[str, Any]:
+    """Load custom config from ``.kimix/config.json`` and wrap it under ``config_json``."""
+    config_path = work_dir / ".kimix" / "config.json"
+    config_json: dict[str, Any] = {}
+    try:
+        raw = await config_path.read_bytes()
+        loaded = orjson.loads(raw)
+        if isinstance(loaded, dict):
+            config_json = loaded
+    except (OSError, orjson.JSONDecodeError, ValueError):
+        pass
+    return {"config_json": config_json}
 
 
 from kimi_cli.soul.context_records import ExportedContext  # noqa: E402
@@ -211,6 +226,8 @@ class Session:
             work_dir_path = work_dir
         resolved_skills_dirs = _resolve_skills_dirs(skills_dir, skills_dirs)
         cli_session = await CliSession.create(work_dir_path, session_id)
+        custom_config = await _load_config_json(work_dir_path)
+        cli_session.custom_config = custom_config
         llm: LLM | None = None
         chat_provider: ChatProvider | None = custom_arguments.pop('chat_provider', None)
         if chat_provider is not None:
@@ -317,6 +334,8 @@ class Session:
             cli_session = await CliSession.find(work_dir, session_id)
         if cli_session is None:
             return None
+        custom_config = await _load_config_json(work_dir)
+        cli_session.custom_config = custom_config
         llm: LLM | None = None
         chat_provider: ChatProvider | None = custom_arguments.pop('chat_provider', None)
         if chat_provider is not None:

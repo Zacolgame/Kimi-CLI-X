@@ -80,7 +80,13 @@ async def _create_session_async(
         skills_dir) if skills_dir is not None else base.get_skill_dirs()
     system_prompts: Callable[[Runtime, bool], str] | None = None
     if system_prompts is None:
-        system_prompts = get_system_prompt(yolo, work_dir, extra_system_prompt, agent_type)
+        system_prompts = get_system_prompt(
+            yolo,
+            work_dir,
+            extra_system_prompt,
+            agent_type,
+            max_system_prompt_tokens=cfg.loop_control.max_system_prompt_tokens,
+        )
     if resume:
         session = await Session.resume(
             session_id=session_id,

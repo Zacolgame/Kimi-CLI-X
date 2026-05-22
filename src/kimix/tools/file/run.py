@@ -83,6 +83,27 @@ class Run(CallableTool2[RunParams]):
                     remaining = parts[1:]
                     if remaining:
                         params.args = remaining + params.args
+
+            # Check forbidden commands
+            forbidden_commands = self._session.custom_config.get("config_json", {}).get("forbidden_commands", [])
+            if forbidden_commands:
+                full_cmd = " ".join([params.path] + params.args)
+                normalized_cmd = " ".join(full_cmd.split())
+                cmd_tokens = normalized_cmd.split()
+                for forbidden in forbidden_commands:
+                    if not isinstance(forbidden, str) or not forbidden:
+                        continue
+                    normalized_forbidden = " ".join(forbidden.split())
+                    forbidden_tokens = normalized_forbidden.split()
+                    if len(forbidden_tokens) > len(cmd_tokens):
+                        continue
+                    if cmd_tokens[:len(forbidden_tokens)] == forbidden_tokens:
+                        return ToolError(
+                            output="",
+                            message=f"Command `{full_cmd}` is forbidden by config rule: `{forbidden}`.",
+                            brief="Forbidden command",
+                        )
+
             # Check if params.path is a valid process name first (executable in PATH or existing file),
             # then fall back to bash built-in commands.
             import shutil
