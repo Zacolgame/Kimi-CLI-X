@@ -57,8 +57,7 @@ class Search(CallableTool2[IndexerParams]):
                         import kimix.base as base
                         custom_config = self._session.custom_config
                         chat_provider = custom_config.get("chat_provider")
-                        default_sub_provider = base._default_sub_provider if base._default_sub_provider is not None else base._default_provider
-                        provider_dict = dict(default_sub_provider) if default_sub_provider is not None else dict(custom_config.get("provider_dict", {}))
+                        default_sub_provider = base._default_sub_provider if base._default_sub_provider is not None else custom_config.get("provider_dict", base._default_provider)
                         if params.dest_path is not None:
                             valid_paths = []
                             for dp in params.dest_path:
@@ -96,7 +95,7 @@ class Search(CallableTool2[IndexerParams]):
                             session = await _create_session_async(
                                 agent_file=base._default_agent_file_dir / 'agent_searcher.json',
                                 agent_type=SystemPromptType.SkillSearcher,
-                                provider_dict=provider_dict,
+                                provider_dict=default_sub_provider,
                                 chat_provider=chat_provider,
                                 thinking=False,
                                 anonymous=True,
@@ -120,12 +119,12 @@ class Search(CallableTool2[IndexerParams]):
 
                 err_msg = await prompt_async()
                 if err_msg:
-                    return ToolError(output='\n'.join(output_strs), message=err_msg, brief='skill search task failed')
+                    return ToolError(output='\n'.join(output_strs), message=err_msg, brief=f'skill search task failed: {params.prompt}')
                 output = '\n'.join(output_strs)
-                return ToolOk(output=output)
+                return ToolOk(output=output, brief=params.prompt)
             except Exception as exc:
                 return ToolError(
                     output="",
                     message=str(exc),
-                    brief="Failed to create session",
+                    brief=f"Failed to create session: {params.prompt}",
                 )

@@ -85,7 +85,8 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
     if args.supervisor:
         base.set_default_supervisor(True)
         print_debug('Supervisor mode ON.')
-
+    if Path('.kimix/config.json').exists():
+        print_debug('.kimix/config.json exists.')
     # Handle --config argument
     if args.config:
         config_path = Path(args.config)

@@ -255,7 +255,7 @@ def _format_tool_result(result: ToolResult) -> str:
     rv = result.return_value
     return rv.message or ""
 
-
+_SUB_AGENT_TASK = {'Agent', 'Search'}
 def print_agent_json(
     wire_msg: Any, output_function: Callable[[str, MessageType], Any] | None = None
 ) -> None:
@@ -279,11 +279,14 @@ def print_agent_json(
     if isinstance(wire_msg, _TOOL_TYPES):
         _switch("tool")
         if isinstance(wire_msg, ToolCall):
+            name = wire_msg.function.name
+            is_sub_agent = name in _SUB_AGENT_TASK
             if _get_consecutive_tool_calls() >= 1:
                 _print_func("")
-            _set_consecutive_tool_calls(_get_consecutive_tool_calls() + 1)
-            name = wire_msg.function.name
+            _set_consecutive_tool_calls(_get_consecutive_tool_calls() + 1 if not is_sub_agent else 0)
             header = f"⚡ {name}"
+            if is_sub_agent:
+                header += '\n'
             colorful_print(header, fg=Color.BRIGHT_MAGENTA, end="")
             _set_last_ended_with_newline(False)
             if output_function:

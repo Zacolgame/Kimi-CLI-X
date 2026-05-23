@@ -51,11 +51,11 @@ class Agent(CallableTool2):
                         import kimix.base as base
                         custom_config = self._session.custom_config
                         chat_provider = custom_config.get("chat_provider")
-                        provider_dict = custom_config.get("provider_dict", base._default_provider)
+                        default_sub_provider = base._default_sub_provider if base._default_sub_provider is not None else custom_config.get("provider_dict", base._default_provider)
                         session = await _create_session_async(
                             session_id=params.session_id,
                             agent_file=base._default_agent_file_dir / 'agent_subagent.json', agent_type=SystemPromptType.TrivialSubAgent,
-                            provider_dict=provider_dict,
+                            provider_dict=default_sub_provider,
                             chat_provider=chat_provider,
                             resume=params.session_id is not None,
                             anonymous=True,
@@ -81,13 +81,13 @@ class Agent(CallableTool2):
                 if err_msg:
                     if sub_session_id is not None:
                         output = f"Session ID: {sub_session_id}\n\n{output}"
-                    return ToolError(output=output, message=err_msg, brief='sub-agent task failed')
+                    return ToolError(output=output, message=err_msg, brief=f'sub-agent task failed: {params.prompt}')
                 if sub_session_id is not None:
                     output = f"Session ID: {sub_session_id}\n\n{output}"
-                return ToolOk(output=output)
+                return ToolOk(output=output, brief=params.prompt)
             except Exception as exc:
                 return ToolError(
                     output="",
                     message=str(exc),
-                    brief="Failed to create session",
+                    brief=f"Failed to create session: {params.prompt}",
                 )

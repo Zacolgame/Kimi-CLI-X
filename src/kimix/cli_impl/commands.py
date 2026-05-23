@@ -196,7 +196,7 @@ def _cmd_txt(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
             text.clear()
             break
         text.append(s)
-    for i in _split_text(text):
+    for i in _split_text(text, _command_map_keys):
         text_arr.append(i)
     return None, False
 
@@ -354,3 +354,4 @@ _command_map = {
     'supervisor': _cmd_supervisor,
     'init': _cmd_init
 }
+_command_map_keys = set(_command_map.keys())

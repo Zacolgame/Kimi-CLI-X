@@ -119,7 +119,7 @@ class Run(CallableTool2[RunParams]):
 
             is_process = False
             is_py = False
-            if (params.path == 'python' and (not Path('./python').exists())) or (params.path == 'python.exe' and (not Path('./python.exe').exists())):
+            if (params.path == 'python' and (shutil.which('python') is None) and (not Path('./python').exists())) or (params.path == 'python.exe' and (shutil.which('python.exe') is None) and (not Path('./python.exe').exists())):
                 params.path = sys.executable
                 is_process = True
                 is_py = True

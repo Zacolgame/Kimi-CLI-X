@@ -5,7 +5,7 @@ def _input(text: str, text_arr: list[str]) -> str:
     return v
 
 
-def _split_text(lines: list[str]) -> list[str]:
+def _split_text(lines: list[str], command_map: set[str] | None = None) -> list[str]:
     text_arr: list[str] = []
     current_text: list[str] = []
     for line in lines:
@@ -14,6 +14,11 @@ def _split_text(lines: list[str]) -> list[str]:
             current_text.append('')
             continue
         if strip_line.startswith('/'):
+            if len(strip_line) > 1:
+                cmd = strip_line[1:].split()[0]
+                if command_map is not None and cmd not in command_map:
+                    current_text.append(line)
+                    continue
             if current_text:
                 text_arr.append('\n'.join(current_text))
                 current_text = []
