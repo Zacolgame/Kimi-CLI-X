@@ -6,7 +6,7 @@ from kimix.base import print_debug, print_warning, print_error
 from . import utils
 
 import argparse
-import json
+import orjson
 import sys
 
 def set_arg() -> tuple[bool, argparse.Namespace]:
@@ -74,14 +74,6 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
         base.set_default_manually_cot(True)
         print_debug('Manually CoT mode ON.')
 
-    if args.ralph is not None:
-        base._default_ralph = args.ralph
-        if base._default_provider is not None:
-            if 'loop_control' not in base._default_provider:
-                base._default_provider['loop_control'] = {}
-            base._default_provider['loop_control']['max_ralph_iterations'] = args.ralph
-        print_debug(f'Ralph mode set to {args.ralph}.')
-
     if args.supervisor:
         base.set_default_supervisor(True)
         print_debug('Supervisor mode ON.')
@@ -128,13 +120,13 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
         config_path = config_path.resolve()
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
+                config_data = orjson.loads(f.read())
             sub_provider = config_data.pop('sub_provider', None)
             base.set_default_provider(config_data)
             if sub_provider and isinstance(sub_provider, dict):
                 base.set_default_sub_provider(sub_provider)
             print_debug(f'{str(config_path)} loaded')
-        except json.JSONDecodeError as e:
+        except orjson.JSONDecodeError as e:
             print_warning(
                 f'Invalid JSON in config file: {str(config_path)} ({e})')
         except Exception as e:
@@ -147,13 +139,22 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
             init.init(False)
         if default_config_path.exists():
             try:
-                config_data = json.loads(default_config_path.read_text(encoding='utf-8'))
+                config_data = orjson.loads(default_config_path.read_text(encoding='utf-8'))
                 sub_provider = config_data.pop('sub_provider', None)
                 base.set_default_provider(config_data)
                 if sub_provider and isinstance(sub_provider, dict):
                     base.set_default_sub_provider(sub_provider)
-            except (json.JSONDecodeError, Exception):
+            except (orjson.JSONDecodeError, Exception):
                 pass
+    
+    if args.ralph is not None:
+        base._default_ralph = args.ralph
+        if base._default_provider is not None:
+            if 'loop_control' not in base._default_provider:
+                base._default_provider['loop_control'] = {}
+            base._default_provider['loop_control']['max_ralph_iterations'] = args.ralph
+        print_debug(f'Ralph mode set to {args.ralph}.')
+
     # Handle --skill-dir argument
     if args.skill_dir:
         skill_dirs = list(base._default_skill_dirs)

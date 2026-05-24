@@ -268,7 +268,6 @@ def print_agent_json(
         if PRINT_STREAM_flag != new_flag:
             if (
                 PRINT_STREAM_flag is not None
-                and PRINT_STREAM_flag != "tool"
                 and not PRINT_STREAM_last_ended_with_newline
             ):
                 _print_func('')
@@ -300,21 +299,19 @@ def print_agent_json(
         elif isinstance(wire_msg, ToolResult):
             _set_consecutive_tool_calls(0)
             rv = wire_msg.return_value
-            if not PRINT_STREAM_last_ended_with_newline:
-                _print_func("\n", end="")
-            display_text = _format_display_blocks(rv.display)
+            display_text: str = ('\n' if not PRINT_STREAM_last_ended_with_newline else '') + _format_display_blocks(rv.display)
             if display_text:
                 _print_func(display_text, end="")
-                _print_func("\n", end="")
-                _set_last_ended_with_newline(True)
+                _set_last_ended_with_newline(display_text.endswith('\n'))
             result_text = _format_tool_result(wire_msg)
             if result_text:
-                prefix = "✗ " if rv.is_error else "✓ "
+                prefix = ('\n' if not PRINT_STREAM_last_ended_with_newline else '') + ("✗ " if rv.is_error else "✓ ")
                 colorful_print(
                     f"{prefix}{result_text}",
                     fg=Color.BRIGHT_RED if rv.is_error else Color.BRIGHT_GREEN,
+                    end=''
                 )
-            _set_last_ended_with_newline(True)
+                _set_last_ended_with_newline(result_text.endswith('\n'))
             if output_function:
                 formatted = f"[ToolResult] {_format_tool_result(wire_msg)}"
                 if formatted:

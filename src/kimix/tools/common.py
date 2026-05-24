@@ -35,6 +35,63 @@ def _find_error_line_index(output: str) -> int | None:
             return idx
     return None
 
+
+# ANSI escape sequences (colored text)
+_ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
+# Emoji base characters
+_EMOJI_BASE = (
+    "\U0001F1E0-\U0001F1FF"  # flags
+    "\U0001F300-\U0001F5FF"  # symbols & pictographs
+    "\U0001F600-\U0001F64F"  # emoticons
+    "\U0001F680-\U0001F6FF"  # transport & map symbols
+    "\U0001F700-\U0001F77F"  # alchemical symbols
+    "\U0001F780-\U0001F7FF"  # geometric shapes extended
+    "\U0001F800-\U0001F8FF"  # supplemental arrows-c
+    "\U0001F900-\U0001F9FF"  # supplemental symbols and pictographs
+    "\U0001FA00-\U0001FA6F"  # chess symbols
+    "\U0001FA70-\U0001FAFF"  # symbols and pictographs extended-a
+    "\U00002600-\U000026FF"  # misc symbols
+    "\U00002700-\U000027BF"  # dingbats
+    "\U000024C2-\U000024FF"  # enclosed alphanumerics
+    "\U0001F100-\U0001F251"  # enclosed alphanumeric / ideographic supplements
+    "\U0001F3FB-\U0001F3FF"  # skin tone modifiers
+)
+
+_EMOJI_RE = re.compile(
+    f"[{_EMOJI_BASE}]"
+    f"(?:"
+    f"  [{_EMOJI_BASE}\U0000FE0F\U000020E3]"
+    f"| \U0000200D [{_EMOJI_BASE}]"
+    f")*",
+    re.VERBOSE | re.UNICODE,
+)
+
+# Keycap sequences (e.g. 1️⃣, #️⃣) – preserve the base digit/symbol
+_KEYCAP_RE = re.compile(r"([0-9#*])\uFE0F?\u20E3")
+
+
+def filter_output(text: str) -> str:
+    """Process process pipeline stdout.
+
+    Steps:
+        1. Remove ANSI escape sequences (colored text).
+        2. Remove emoji characters and sequences.
+
+    Args:
+        text: Raw stdout text.
+
+    Returns:
+        Cleaned plain text.
+    """
+    if not isinstance(text, str):
+        raise TypeError("filter_output expects a string")
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    text = _EMOJI_RE.sub("", text)
+    text = _KEYCAP_RE.sub(r"\1", text)
+    return text
+
+
 from kimi_cli.session import Session
 
 if TYPE_CHECKING:
@@ -199,17 +256,19 @@ class ProcessTask:
                     while True:
                         if self._stop_event.is_set():
                             break
-                        data = await process.stdout.read(1)
+                        data = await process.stdout.read(4096)
                         if data:
-                            char = decoder.decode(data)
-                            if char:
-                                q.put_nowait(char)
-                                output_buffer.write(char)
+                            text = decoder.decode(data)
+                            if text:
+                                text = filter_output(text)
+                                q.put_nowait(text)
+                                output_buffer.write(text)
                         else:
-                            char = decoder.decode(b'', final=True)
-                            if char:
-                                q.put_nowait(char)
-                                output_buffer.write(char)
+                            text = decoder.decode(b'', final=True)
+                            if text:
+                                text = filter_output(text)
+                                q.put_nowait(text)
+                                output_buffer.write(text)
                             break
                 except (IOError, OSError, ValueError, asyncio.CancelledError):
                     pass
@@ -226,12 +285,14 @@ class ProcessTask:
                         if data:
                             text = decoder.decode(data)
                             if text:
+                                text = filter_output(text)
                                 msg = "[stderr] " + text
                                 q.put_nowait(msg)
                                 output_buffer.write(msg)
                         else:
                             text = decoder.decode(b'', final=True)
                             if text:
+                                text = filter_output(text)
                                 msg = "[stderr] " + text
                                 q.put_nowait(msg)
                                 output_buffer.write(msg)
@@ -302,6 +363,7 @@ class ProcessTask:
                 remaining_stdout = await process.stdout.read()
                 if remaining_stdout:
                     text = remaining_stdout.decode('utf-8', errors='replace')
+                    text = filter_output(text)
                     q.put_nowait(text)
                     output_buffer.write(text)
             except (IOError, OSError, ValueError):
@@ -311,6 +373,7 @@ class ProcessTask:
                     remaining_stderr = await process.stderr.read()
                     if remaining_stderr:
                         text = remaining_stderr.decode('utf-8', errors='replace')
+                        text = filter_output(text)
                         msg = "[stderr] " + text
                         q.put_nowait(msg)
                         output_buffer.write(msg)
