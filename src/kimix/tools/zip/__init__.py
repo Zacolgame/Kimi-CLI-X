@@ -16,7 +16,7 @@ class Params(BaseModel):
         description="Path to file or directory to compress.",
     )
     destination: str = Field(
-        description="Output 7z file path (default: source name + .7z)."
+        description="Output 7z file path (default: source name + .7z).",
         default="",
     )
     password: str = Field(
@@ -135,8 +135,10 @@ class Zip(CallableTool2):
 
                 return ToolOk(output="\n".join(output_lines))
             else:
+                stdout = result.stdout or ""
+                stderr = result.stderr or ""
                 return ToolError(
-                    output=result.stdout + "\n" + result.stderr,
+                    output=stdout + ("\n" + stderr if stderr else ""),
                     message=f"7z command failed with exit code: {result.returncode}",
                     brief="Compression failed",
                 )
@@ -170,7 +172,7 @@ class UnzipParams(BaseModel):
         description="Archive file path to extract."
     )
     destination: str = Field(
-        description="Output directory (default: same as archive)."
+        description="Output directory (default: same as archive).",
         default="",
     )
     password: str = Field(
@@ -303,8 +305,10 @@ class Unzip(CallableTool2):
 
                 return ToolOk(output="\n".join(output_lines))
             else:
+                stdout = result.stdout or ""
+                stderr = result.stderr or ""
                 return ToolError(
-                    output=result.stdout + "\n" + result.stderr,
+                    output=stdout + ("\n" + stderr if stderr else ""),
                     message=f"7z extraction failed with exit code: {result.returncode}",
                     brief="Extraction failed",
                 )

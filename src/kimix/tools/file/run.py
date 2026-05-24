@@ -60,7 +60,7 @@ class Run(CallableTool2[RunParams]):
 
 
     async def __call__(self, params: RunParams) -> ToolReturnValue:
-
+        import os
         script_path: str | None = None
         try:
             # params.path may contain arguments, split it respecting quotes, then insert to the start of params.args
@@ -115,7 +115,6 @@ class Run(CallableTool2[RunParams]):
             # Check if params.path is a valid process name first (executable in PATH or existing file),
             # then fall back to bash built-in commands.
             import shutil
-            import os
 
             is_process = False
             is_py = False
@@ -138,7 +137,7 @@ class Run(CallableTool2[RunParams]):
                     result = await run_bash(params, self._session)
                     return ToolReturnValue(
                         is_error=result.is_error,
-                        message=result.message + warning, brief=result.brief, output=result.output,
+                        message=(result.message or "") + warning, brief=result.brief or "", output=result.output,
                         display=result.display
                     )
                 bash_name = _WINDOWS_ALIASES.get(params.path, params.path)
@@ -146,7 +145,7 @@ class Run(CallableTool2[RunParams]):
                     result = await run_bash(params, self._session)
                     return ToolReturnValue(
                         is_error=result.is_error,
-                        message=result.message + warning, brief=result.brief, output=result.output,
+                        message=(result.message or "") + warning, brief=result.brief or "", output=result.output,
                         display=result.display
                     )
                 else:
