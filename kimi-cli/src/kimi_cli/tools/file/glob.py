@@ -1,6 +1,9 @@
 """Glob tool implementation."""
 
 import asyncio
+import fnmatch
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import override
 
@@ -16,6 +19,7 @@ from .utils import resolve_vfs
 from kimi_cli.utils.path import (
     kaos_path_from_user_input,
 )
+
 MAX_MATCHES = 1000
 MAX_BYTES = 100 << 10  # 100KB
 GLOB_DESC_PATH = Path(__file__).parent / "glob.md"
@@ -24,6 +28,31 @@ WINDOWS_PATH_HINT = (
     "(`/c/Users/foo`) paths. Results use backslashes — convert to forward "
     "slashes for shell commands."
 )
+
+# Global cache for .gitignore files under a root directory.
+# Key: root directory path (str)
+# Value: _GitignoreCacheEntry
+_GITIGNORE_CACHE: dict[str, "_GitignoreCacheEntry"] = {}
+
+
+@dataclass
+class _GitignoreRule:
+    """A single parsed gitignore rule."""
+
+    pattern: str
+    negated: bool
+    anchored: bool  # True if pattern contains '/' (not just trailing)
+    is_dir_only: bool  # True if pattern ends with '/'
+    source_dir: Path  # Directory containing the .gitignore
+
+
+@dataclass
+class _GitignoreCacheEntry:
+    """Cached gitignore state for a root directory."""
+
+    gitignore_paths: list[Path] = field(default_factory=list)
+    rules: list[_GitignoreRule] = field(default_factory=list)
+    mtimes: dict[str, float] = field(default_factory=dict)
 
 
 def _description_for_os(os_kind: str) -> str:
@@ -36,6 +65,194 @@ def _description_for_os(os_kind: str) -> str:
     )
 
 
+def _parse_gitignore(content: str, source_dir: Path) -> list[_GitignoreRule]:
+    """Parse a .gitignore file into a list of rules."""
+    rules: list[_GitignoreRule] = []
+    for raw_line in content.splitlines():
+        line = raw_line.rstrip()
+        if not line or line.startswith("#"):
+            continue
+        negated = line.startswith("!")
+        if negated:
+            line = line[1:]
+        if not line:
+            continue
+        is_dir_only = line.endswith("/")
+        if is_dir_only:
+            line = line[:-1]
+        # Anchored if it contains a slash anywhere (not just trailing)
+        anchored = "/" in line
+        # Remove leading slash for anchored patterns
+        if line.startswith("/"):
+            line = line[1:]
+            anchored = True
+        rules.append(
+            _GitignoreRule(
+                pattern=line,
+                negated=negated,
+                anchored=anchored,
+                is_dir_only=is_dir_only,
+                source_dir=source_dir,
+            )
+        )
+    return rules
+
+
+def _gitignore_match(path: Path, rel_path: str, is_dir: bool, rule: _GitignoreRule) -> bool:
+    """Check if a path matches a single gitignore rule."""
+    if rule.is_dir_only and not is_dir:
+        return False
+
+    pattern = rule.pattern
+
+    # Handle ** patterns
+    if "**" in pattern:
+        parts = pattern.split("/")
+        rel_parts = rel_path.split("/")
+
+        if pattern == "**":
+            return True
+        if pattern.startswith("**/"):
+            suffix = pattern[3:]
+            # Match suffix against any suffix of rel_parts
+            for i in range(len(rel_parts)):
+                sub = "/".join(rel_parts[i:])
+                if fnmatch.fnmatch(sub, suffix) or fnmatch.fnmatch(rel_parts[-1], suffix):
+                    return True
+            return False
+        if pattern.endswith("/**"):
+            prefix = pattern[:-3]
+            if rel_path.startswith(prefix + "/") or rel_path == prefix:
+                return True
+            return False
+        if "/**/" in pattern:
+            prefix, suffix = pattern.split("/**/", 1)
+            if rel_path.startswith(prefix + "/") or rel_path == prefix:
+                rest = rel_path[len(prefix) + 1 :] if rel_path.startswith(prefix + "/") else ""
+                if not suffix:
+                    return True
+                # suffix must match somewhere in the rest
+                rest_parts = rest.split("/")
+                for i in range(len(rest_parts)):
+                    sub = "/".join(rest_parts[i:])
+                    if fnmatch.fnmatch(sub, suffix) or fnmatch.fnmatch(rest_parts[-1], suffix):
+                        return True
+            return False
+
+        # Generic ** fallback: replace ** with * and match
+        simple_pattern = pattern.replace("**", "*")
+        return fnmatch.fnmatch(rel_path, simple_pattern) or fnmatch.fnmatch(rel_path.split("/")[-1], simple_pattern)
+
+    if rule.anchored:
+        # Match against the relative path from the gitignore directory
+        return fnmatch.fnmatch(rel_path, pattern)
+    else:
+        # Match against basename or any path component
+        basename = rel_path.split("/")[-1]
+        if fnmatch.fnmatch(basename, pattern):
+            return True
+        # Also match if any directory component matches
+        for part in rel_path.split("/")[:-1]:
+            if fnmatch.fnmatch(part, pattern):
+                return True
+        return False
+
+
+def _is_ignored_by_gitignore(
+    path: Path, rules: list[_GitignoreRule], root_dir: Path
+) -> bool:
+    """Check if a path is ignored by any gitignore rule (with negation support)."""
+    # Find the deepest .gitignore that applies (i.e., closest ancestor)
+    # Standard gitignore behavior: later rules override earlier ones
+    # We process all rules in order of discovery (root-first, then deeper)
+    ignored = False
+    for rule in rules:
+        try:
+            rel_path = str(path.relative_to(rule.source_dir)).replace("\\", "/")
+        except ValueError:
+            continue
+        is_dir = path.is_dir()
+        if _gitignore_match(path, rel_path, is_dir, rule):
+            ignored = not rule.negated
+    return ignored
+
+
+def _safe_getmtime(path: str) -> float:
+    try:
+        return os.path.getmtime(path)
+    except (OSError, ValueError):
+        return 0.0
+
+
+def _find_gitignore_files(root: Path) -> list[Path]:
+    """Find all .gitignore files under root."""
+    gitignores: list[Path] = []
+    try:
+        for dirpath, _dirnames, filenames in os.walk(root):
+            if ".gitignore" in filenames:
+                gitignores.append(Path(dirpath) / ".gitignore")
+    except OSError:
+        pass
+    return gitignores
+
+
+def _load_gitignore_rules(root: Path) -> tuple[list[Path], list[_GitignoreRule], dict[str, float]]:
+    """Load all gitignore rules under root and their mtimes."""
+    gitignore_paths = _find_gitignore_files(root)
+    rules: list[_GitignoreRule] = []
+    mtimes: dict[str, float] = {}
+    for gi_path in gitignore_paths:
+        mtime = _safe_getmtime(str(gi_path))
+        mtimes[str(gi_path)] = mtime
+        try:
+            with open(gi_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except OSError:
+            continue
+        rules.extend(_parse_gitignore(content, gi_path.parent))
+    return gitignore_paths, rules, mtimes
+
+
+def _get_gitignore_rules(root: Path) -> list[_GitignoreRule]:
+    """Get cached gitignore rules for a root directory, refreshing if needed."""
+    global _GITIGNORE_CACHE
+    root_str = str(root.resolve())
+
+    cache = _GITIGNORE_CACHE.get(root_str)
+    needs_refresh = True
+
+    if cache is not None:
+        # Check if any file was modified or deleted
+        needs_refresh = False
+        # Check if new files appeared or old ones changed
+        current_paths = set(str(p) for p in cache.gitignore_paths)
+        for path_str, old_mtime in cache.mtimes.items():
+            if not os.path.exists(path_str):
+                needs_refresh = True
+                break
+            new_mtime = _safe_getmtime(path_str)
+            if new_mtime != old_mtime:
+                needs_refresh = True
+                break
+        if not needs_refresh:
+            # Also check if any new .gitignore files were added
+            gitignores = _find_gitignore_files(root)
+            new_paths = set(str(p) for p in gitignores)
+            if new_paths != current_paths:
+                needs_refresh = True
+
+    if needs_refresh:
+        gitignore_paths, rules, mtimes = _load_gitignore_rules(root)
+        cache = _GitignoreCacheEntry(
+            gitignore_paths=gitignore_paths,
+            rules=rules,
+            mtimes=mtimes,
+        )
+        _GITIGNORE_CACHE[root_str] = cache
+
+    return cache.rules
+
+
 class Params(BaseModel):
     pattern: str = Field(description="Glob pattern. Never start with `**`.")
     directory: str | None = Field(
@@ -45,6 +262,10 @@ class Params(BaseModel):
     include_dirs: bool = Field(
         description="Include directories in results.",
         default=True,
+    )
+    include_ignored: bool = Field(
+        description="Include .gitignore files.",
+        default=False,
     )
 
 
@@ -107,6 +328,15 @@ class Glob(CallableTool2[Params]):
                     brief=f"Invalid directory: {params.directory}",
                 )
 
+            # Load gitignore rules if needed (sync I/O in executor)
+            gitignore_rules: list[_GitignoreRule] = []
+            if not params.include_ignored:
+                try:
+                    resolved_dir = Path(str(dir_path)).resolve()
+                    gitignore_rules = await asyncio.to_thread(_get_gitignore_rules, resolved_dir)
+                except Exception:
+                    pass
+
             # Perform the glob search - bounded streaming with inline filtering
             matches: list[KaosPath] = []
             truncated = False
@@ -115,6 +345,14 @@ class Glob(CallableTool2[Params]):
                     async for match in dir_path.glob(pattern):
                         if not params.include_dirs and not await match.is_file():
                             continue
+                        # Apply gitignore filtering
+                        if gitignore_rules:
+                            try:
+                                match_resolved = Path(str(match)).resolve()
+                                if _is_ignored_by_gitignore(match_resolved, gitignore_rules, resolved_dir):
+                                    continue
+                            except Exception:
+                                pass
                         matches.append(match)
                         if len(matches) > MAX_MATCHES:
                             truncated = True

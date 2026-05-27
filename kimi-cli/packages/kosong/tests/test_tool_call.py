@@ -17,6 +17,7 @@ from kosong.tooling import (
     ToolResult,
     ToolResultFuture,
     ToolReturnValue,
+    _repair_dict_for_model,
 )
 from kosong.tooling.error import (
     ToolNotFoundError,
@@ -184,7 +185,7 @@ def test_simple_toolset():
             id="2",
             function=ToolCall.FunctionBody(
                 name="compare",
-                arguments='{"a": 1, b: 2}',
+                arguments='{"a": 1, "b": 2}',
             ),
         ),
         ToolCall(
@@ -232,7 +233,7 @@ def test_simple_toolset():
     results = asyncio.run(run())
     assert results[0].tool_call_id == "1"
     assert results[0].return_value == ToolOk(output="3")
-    assert isinstance(results[1].return_value, ToolParseError)
+    assert results[1].return_value == ToolOk(output="less")
     assert isinstance(results[2].return_value, ToolValidateError)
     assert isinstance(results[3].return_value, ToolRuntimeError)
     assert isinstance(results[4].return_value, ToolNotFoundError)
@@ -466,3 +467,129 @@ def test_simple_toolset_with_string_annotation_handle():
     """Test that tools with string annotations can be called correctly."""
     result = asyncio.run(_test_handle_async_with_string_annotation())
     assert result.return_value == ToolOk(output="5")
+
+
+# ---------------------------------------------------------------------------
+# Tests for generic argument repair (Option 3)
+# ---------------------------------------------------------------------------
+
+
+def test_repair_dict_common_alias():
+    """content -> title mapping works via common aliases."""
+
+    class Todo(BaseModel):
+        title: str = Field(description="Title")
+        status: str = Field(description="Status")
+
+    repaired = _repair_dict_for_model({"content": "Buy milk", "status": "pending"}, Todo)
+    assert repaired == {"title": "Buy milk", "status": "pending"}
+
+
+def test_repair_dict_exact_alias():
+    """Declared pydantic aliases are respected."""
+
+    class Params(BaseModel):
+        query: str = Field(alias="q")
+
+    repaired = _repair_dict_for_model({"q": "hello"}, Params)
+    assert repaired == {"query": "hello"}
+
+
+def test_repair_dict_no_unnecessary_changes():
+    """Valid dicts are returned unchanged."""
+
+    class Params(BaseModel):
+        title: str
+        status: str
+
+    original = {"title": "Buy milk", "status": "pending"}
+    repaired = _repair_dict_for_model(original, Params)
+    assert repaired == original
+
+
+def test_repair_dict_nested_model():
+    """Repair recurses into nested BaseModel fields."""
+
+    class Inner(BaseModel):
+        title: str
+
+    class Outer(BaseModel):
+        inner: Inner
+
+    repaired = _repair_dict_for_model({"inner": {"content": "nested"}}, Outer)
+    assert repaired == {"inner": {"title": "nested"}}
+
+
+def test_repair_dict_list_of_models():
+    """Repair recurses into list items that are BaseModels."""
+
+    class Item(BaseModel):
+        title: str
+
+    class Params(BaseModel):
+        items: list[Item]
+
+    repaired = _repair_dict_for_model(
+        {"items": [{"content": "a"}, {"content": "b"}]},
+        Params,
+    )
+    assert repaired == {"items": [{"title": "a"}, {"title": "b"}]}
+
+
+def test_repair_dict_union_list_single():
+    """Repair handles list[T] | T | None annotations."""
+
+    class Item(BaseModel):
+        title: str
+
+    class Params(BaseModel):
+        items: list[Item] | Item | None = None
+
+    repaired = _repair_dict_for_model({"items": {"content": "single"}}, Params)
+    assert repaired == {"items": {"title": "single"}}
+
+
+def test_callable_tool_2_repair_on_call():
+    """CallableTool2.call() auto-repairs and succeeds when common alias is used."""
+
+    class Todo(BaseModel):
+        title: str = Field(description="Title")
+        status: str = Field(default="pending")
+
+    class Params(BaseModel):
+        todos: list[Todo]
+
+    class TestTool(CallableTool2[Params]):
+        name: str = "test"
+        description: str = "test"
+        params: type[Params] = Params
+
+        @override
+        async def __call__(self, params: Params) -> ToolReturnValue:
+            return ToolOk(output=params.todos[0].title)
+
+    tool = TestTool()
+    result = asyncio.run(
+        tool.call({"todos": [{"content": "Buy milk", "status": "done"}]})
+    )
+    assert result == ToolOk(output="Buy milk")
+
+
+def test_callable_tool_2_repair_falls_back_to_error():
+    """When repair cannot fix the arguments, original ValidationError is returned."""
+
+    class Params(BaseModel):
+        title: str
+
+    class TestTool(CallableTool2[Params]):
+        name: str = "test"
+        description: str = "test"
+        params: type[Params] = Params
+
+        @override
+        async def __call__(self, params: Params) -> ToolReturnValue:
+            return ToolOk(output=params.title)
+
+    tool = TestTool()
+    result = asyncio.run(tool.call({"completely_wrong": "Buy milk"}))
+    assert isinstance(result, ToolValidateError)

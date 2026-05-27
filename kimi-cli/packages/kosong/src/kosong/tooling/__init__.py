@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from asyncio import Future
+import typing
 from typing import Any, ClassVar, Protocol, Self, cast, override, runtime_checkable
 
 import jsonschema
@@ -217,6 +218,283 @@ class CallableTool(Tool, ABC):
         ...
 
 
+# Common LLM field-name substitutions that differ from the canonical schema name.
+# Maps the *wrong* key the LLM often sends → the *correct* field name.
+_COMMON_FIELD_ALIASES: dict[str, str] = {
+    # title / description / message
+    "content": "title",
+    "text": "title",
+    "name": "title",
+    "desc": "description",
+    "detail": "description",
+    "label": "description",
+    "summary": "description",
+    "info": "description",
+    "msg": "message",
+    "note": "message",
+    # command / code / script
+    "cmd": "command",
+    "script": "command",
+    "shell_command": "command",
+    "program": "code",
+    "snippet": "code",
+    # path / file / directory
+    "file": "path",
+    "filepath": "path",
+    "file_path": "path",
+    "filename": "path",
+    "file_name": "path",
+    "dir": "path",
+    "directory": "path",
+    "folder": "path",
+    "location": "path",
+    # content / data
+    "data": "content",
+    "body": "content",
+    "source": "content",
+    "value": "content",
+    # url / link
+    "link": "url",
+    "href": "url",
+    "address": "url",
+    "uri": "url",
+    "site": "url",
+    # query / search
+    "q": "query",
+    "search": "query",
+    "keyword": "query",
+    "keywords": "query",
+    "term": "query",
+    "question": "query",
+    # prompt / instruction
+    "instruction": "prompt",
+    "task": "prompt",
+    "request": "prompt",
+    # timeout / wait
+    "wait": "timeout",
+    "delay": "timeout",
+    "time_limit": "timeout",
+    "duration": "timeout",
+    # reason / cause
+    "cause": "reason",
+    "explanation": "reason",
+    "rationale": "reason",
+    "justification": "reason",
+    "purpose": "reason",
+    # pattern / regex
+    "regex": "pattern",
+    "expr": "pattern",
+    "expression": "pattern",
+    "match": "pattern",
+    # edit / changes
+    "changes": "edit",
+    "modifications": "edit",
+    "patch": "edit",
+    # edit nested fields
+    "original": "old",
+    "current": "old",
+    "find": "old",
+    "target": "old",
+    "replace_with": "new",
+    "to": "new",
+    "all": "replace_all",
+    # action / operation
+    "operation": "action",
+    "op": "action",
+    # step / stage
+    "stage": "step",
+    "phase": "step",
+    "entry": "step",
+    # result / outcome
+    "outcome": "result",
+    "return": "result",
+    "status": "result",
+    # files / paths
+    "paths": "files",
+    "file_list": "files",
+    # task_id
+    "id": "task_id",
+    "job_id": "task_id",
+    # block / sync
+    "blocking": "block",
+    "sync": "block",
+    # kill / stop
+    "force": "kill",
+    "terminate": "kill",
+    "stop": "kill",
+    # output_path / destination
+    "out": "output_path",
+    "output": "output_path",
+    "destination": "output_path",
+    "dest": "output_path",
+    # run_in_background
+    "background": "run_in_background",
+    "async": "run_in_background",
+    "detach": "run_in_background",
+    "bg": "run_in_background",
+    # mode / method
+    "method": "mode",
+    "write_mode": "mode",
+    # line_offset
+    "offset": "line_offset",
+    "start": "line_offset",
+    "start_line": "line_offset",
+    # n_lines
+    "lines": "n_lines",
+    "count": "n_lines",
+    "num_lines": "n_lines",
+    # max_char
+    "chars": "max_char",
+    "max_chars": "max_char",
+    "char_limit": "max_char",
+    # char_offset
+    "byte_offset": "char_offset",
+    "position": "char_offset",
+    # include_dirs
+    "dirs": "include_dirs",
+    "directories": "include_dirs",
+    # include_ignored
+    "ignored": "include_ignored",
+    "gitignore": "include_ignored",
+    "hidden": "include_ignored",
+    # case_insensitive
+    "ignore_case": "case_insensitive",
+    "insensitive": "case_insensitive",
+    # head_limit
+    "max": "head_limit",
+    "max_results": "head_limit",
+    "limit": "head_limit",
+    # multiline
+    "multi_line": "multiline",
+    # output_mode
+    "format": "output_mode",
+    # type (file type)
+    "file_type": "type",
+    "kind": "type",
+    # todos
+    "items": "todos",
+    "list": "todos",
+    "tasks": "todos",
+    "entries": "todos",
+    # force_replace
+    "replace": "force_replace",
+    "override": "force_replace",
+    # questions
+    "queries": "questions",
+    "msgs": "questions",
+    # active_only
+    "active": "active_only",
+    "running": "active_only",
+    "current": "active_only",
+    # brief
+    "short": "brief",
+    # k / n / top_k
+    "n": "k",
+    "top_k": "k",
+    "num": "k",
+    # subagent_type
+    "agent_type": "subagent_type",
+    # model / llm
+    "llm": "model",
+    "model_name": "model",
+    # resume / session
+    "continue": "resume",
+    "agent_id": "resume",
+    # cwd
+    "working_dir": "cwd",
+    "work_dir": "cwd",
+    # env / variables
+    "environment": "env",
+    "vars": "env",
+    "variables": "env",
+    # args / arguments
+    "arguments": "args",
+    "params": "args",
+    "arg": "args",
+    "parameters": "args",
+    # text / input / stdin
+    "input": "text",
+    "stdin": "text",
+    # glob / filter
+    "filter": "glob",
+    "file_pattern": "glob",
+}
+
+
+def _get_base_model_type(annotation: Any) -> type[BaseModel] | None:
+    """Extract a BaseModel subclass from a type annotation, unwrapping generics."""
+    origin = typing.get_origin(annotation)
+    if origin is not None:
+        for arg in typing.get_args(annotation):
+            result = _get_base_model_type(arg)
+            if result is not None:
+                return result
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    return None
+
+
+def _repair_dict_for_model(
+    data: dict[str, Any],
+    model: type[BaseModel],
+    common_aliases: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Recursively repair dict keys to match a Pydantic model's expected fields.
+
+    1. Map exact field names and declared aliases.
+    2. For remaining missing fields, try common LLM aliases.
+    3. Recurse into nested BaseModel fields and list items.
+    """
+    common_aliases = common_aliases or _COMMON_FIELD_ALIASES
+    fields = model.model_fields
+
+    # Build known key → canonical field name mapping from model metadata.
+    known: dict[str, str] = {}
+    for fname, finfo in fields.items():
+        known[fname] = fname
+        if finfo.alias and finfo.alias != fname:
+            known[finfo.alias] = fname
+        val_alias = getattr(finfo, "validation_alias", None)
+        if isinstance(val_alias, str) and val_alias != fname:
+            known[val_alias] = fname
+
+    # First pass: map known keys.
+    mapped: dict[str, Any] = {}
+    unmapped: dict[str, Any] = {}
+    for key, value in data.items():
+        if key in known:
+            mapped[known[key]] = value
+        else:
+            unmapped[key] = value
+            mapped[key] = value
+
+    # Second pass: try common aliases for fields that are still missing.
+    missing = set(fields.keys()) - set(mapped.keys())
+    for missing_field in missing:
+        for bad_key, good_key in common_aliases.items():
+            if good_key == missing_field and bad_key in unmapped:
+                mapped[good_key] = mapped.pop(bad_key)
+                break
+
+    # Third pass: recurse into nested models.
+    for fname, finfo in fields.items():
+        if fname not in mapped:
+            continue
+        val = mapped[fname]
+        nested = _get_base_model_type(finfo.annotation)
+        if nested is None:
+            continue
+        if isinstance(val, dict):
+            mapped[fname] = _repair_dict_for_model(val, nested, common_aliases)
+        elif isinstance(val, list):
+            mapped[fname] = [
+                _repair_dict_for_model(item, nested, common_aliases) if isinstance(item, dict) else item
+                for item in val
+            ]
+
+    return mapped
+
+
 class _GenerateJsonSchemaNoTitles(GenerateJsonSchema):
     """Custom JSON schema generator that omits titles."""
 
@@ -296,6 +574,16 @@ class CallableTool2[Params: BaseModel](ABC):
         try:
             params = self.params.model_validate(arguments)
         except pydantic.ValidationError as e:
+            # Attempt to repair common LLM field-name mismatches and re-validate.
+            if isinstance(arguments, dict):
+                repaired = _repair_dict_for_model(arguments, self.params)
+                if repaired != arguments:
+                    try:
+                        params = self.params.model_validate(repaired)
+                    except pydantic.ValidationError:
+                        pass  # fall through to return the original error
+                    else:
+                        return await self.__call__(params)
             return ToolValidateError(str(e))
 
         ret = await self.__call__(params)
