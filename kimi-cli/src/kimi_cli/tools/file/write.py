@@ -12,7 +12,6 @@ from kimi_cli.soul.agent import Runtime
 from kimi_cli.soul.approval import Approval
 from kimi_cli.tools.display import DiffDisplayBlock
 from kimi_cli.tools.file import FileActions
-from kimi_cli.tools.reason import ToolCallReason
 from kimi_cli.tools.file.check_fmt import check_json_text, check_toml_text, check_xml_text, check_yaml_text
 from kimi_cli.tools.file.plan_mode import inspect_plan_edit_target
 from kimi_cli.utils.diff import build_diff_blocks
@@ -32,10 +31,6 @@ class Params(BaseModel):
     mode: Literal["overwrite", "append"] = Field(
         description="Write mode: overwrite or append.",
         default="overwrite",
-    )
-    reason: str = Field(
-        default="",
-        description="Reason to call this tool.",
     )
 
 
@@ -101,10 +96,6 @@ class WriteFile(CallableTool2[Params]):
 
     @override
     async def __call__(self, params: Params) -> ToolReturnValue:
-        tool_call_reason = self._session.custom_data.get("tool_call_reason")
-        if isinstance(tool_call_reason, ToolCallReason):
-            tool_call_reason.add_tool_call_reason(params, self)
-
         # TODO: checks:
         # - check if the path may contain secrets
         if not params.path:

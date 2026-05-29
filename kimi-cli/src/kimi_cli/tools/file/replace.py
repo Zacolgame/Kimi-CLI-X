@@ -16,7 +16,6 @@ from kimi_cli.soul.agent import Runtime
 from kimi_cli.soul.approval import Approval
 from kimi_cli.tools.display import DisplayBlock
 from kimi_cli.tools.file import FileActions
-from kimi_cli.tools.reason import ToolCallReason
 from kimi_cli.tools.file.check_fmt import check_json_text, check_toml_text, check_xml_text, check_yaml_text
 from kimi_cli.tools.file.plan_mode import inspect_plan_edit_target
 from kimi_cli.tools.utils import load_desc
@@ -42,11 +41,6 @@ class Params(BaseModel):
     edit: Edit | list[Edit] = Field(
         description="One or more edits."
     )
-    reason: str = Field(
-        default="",
-        description="Reason to call this tool.",
-    )
-
 
 class EditFile(CallableTool2[Params]):
     name: str = "EditFile"
@@ -258,10 +252,6 @@ class EditFile(CallableTool2[Params]):
 
     @override
     async def __call__(self, params: Params) -> ToolReturnValue:
-        tool_call_reason = self._session.custom_data.get("tool_call_reason")
-        if isinstance(tool_call_reason, ToolCallReason):
-            tool_call_reason.add_tool_call_reason(params, self)
-
         if not params.path:
             return ToolError(
                 message="File path cannot be empty.",
