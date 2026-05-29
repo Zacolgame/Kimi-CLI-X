@@ -47,7 +47,7 @@ class TestTaskList:
     async def test_empty(self, mock_session: MagicMock) -> None:
         tool = TaskOutput(session=mock_session)
         result = await tool(TaskOutputParams(task_id=None))
-        assert "No tasks" in str(result.output)
+        assert "No running task" in str(result.output)
 
     async def test_lists_tasks(self, mock_session: MagicMock) -> None:
         tool = TaskOutput(session=mock_session)
@@ -70,7 +70,7 @@ class TestTaskOutput:
     async def test_not_found(self, mock_session: MagicMock) -> None:
         tool = TaskOutput(session=mock_session)
         result = await tool(TaskOutputParams(task_id="missing"))
-        assert "not found" in str(result.message)
+        assert "No running task" in str(result.message)
 
     async def test_wait_and_get_output(self, mock_session: MagicMock) -> None:
         tool = TaskOutput(session=mock_session)

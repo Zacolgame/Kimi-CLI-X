@@ -76,15 +76,21 @@ class TaskOutput(CallableTool2):
 
             if params.task_id is None:
                 if not tasks:
-                    return ToolOk(output="No tasks.", brief="No background tasks")
+                    return ToolOk(output="No running task", brief="No background tasks")
                 started = await _list_started()
-                task_list = ", ".join(started) if started else "(no tasks)"
+                task_list = ", ".join(started) if started else "No running task"
                 return ToolOk(output=task_list, brief="Background tasks listed")
 
             stream: BackgroundStream | None = tasks.get(params.task_id.strip())
             if stream is None:
                 started = await _list_started()
-                task_list = ", ".join(started) if started else "(no tasks)"
+                if not started:
+                    return ToolError(
+                        message="No running task",
+                        output="",
+                        brief="No running task"
+                    )
+                task_list = ", ".join(started)
                 return ToolError(
                     message=f"Task '{params.task_id}' not found. Available tasks: [{task_list}]",
                     output="",

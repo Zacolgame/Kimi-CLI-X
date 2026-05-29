@@ -40,7 +40,7 @@ _DEFAULT_FORBIDDEN_COMMANDS = [
 
 class RunParams(BaseModel):
     executable: str = Field(
-        description="Executable path or application name (no need for a full path)."
+        description="Executable path or application name, no need for a full path."
     )
     args: list[str] = Field(
         default_factory=list,
@@ -62,7 +62,7 @@ class RunParams(BaseModel):
     )
     env: list[str] | None = Field(
         default=None,
-        description="Environment variables to set for the subprocess, in 'KEY=VALUE' format. If no '=' is present, the value is set to '1'."
+        description="Environment variables to set for the subprocess."
     )
     run_in_background: bool = Field(
         default=False,
@@ -176,7 +176,7 @@ class Run(CallableTool2[RunParams]):
                 else:
                     return ToolError(
                         output="",
-                        message=f"Command not found: '{params.executable}' is not a valid executable or bash built-in command." + warning,
+                        message=f"Executable not found: '{params.executable}' is not a valid executable or bash built-in command.",
                         brief=display_cmd,
                     )
 
