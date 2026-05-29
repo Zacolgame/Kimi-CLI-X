@@ -77,8 +77,38 @@ def set_arg() -> tuple[bool, argparse.Namespace]:
     if args.supervisor:
         base.set_default_supervisor(True)
         print_debug('Supervisor mode ON.')
-    if Path('.kimix/config.json').exists():
+    # Read skill_dir from .kimix/config.json (string or array)
+    config_json_path = Path('.kimix/config.json')
+    if config_json_path.exists():
         print_debug('.kimix/config.json exists.')
+    config_json_path = Path('.kimix/skill.json')
+    if config_json_path.exists():
+        print_debug('.kimix/skill.json exists.')
+        try:
+            config_json = orjson.loads(config_json_path.read_text(encoding='utf-8'))
+            skill_dir_cfg = config_json.get('skill_dir')
+            if skill_dir_cfg is not None:
+                if isinstance(skill_dir_cfg, str):
+                    skill_dir_cfg = [skill_dir_cfg]
+                if isinstance(skill_dir_cfg, list):
+                    skill_dirs_from_cfg = []
+                    for sd in skill_dir_cfg:
+                        if not isinstance(sd, str):
+                            continue
+                        sd_path = Path(sd)
+                        if not sd_path.is_absolute():
+                            sd_path = constants.curr_dir / sd_path
+                        sd_path = sd_path.resolve()
+                        if sd_path.exists() and sd_path.is_dir():
+                            skill_dirs_from_cfg.append(KaosPath(str(sd_path)))
+                            print_debug(f'Skill dir from config: {str(sd_path)}')
+                        else:
+                            print_warning(f'Skill dir from config not found: {str(sd_path)}')
+                    if skill_dirs_from_cfg:
+                        existing = list(base._default_skill_dirs)
+                        base.set_default_skill_dirs(existing + skill_dirs_from_cfg)
+        except (orjson.JSONDecodeError, Exception) as e:
+            print_warning(f'Failed to read skill_dir from .kimix/skill.json: {e}')
     # Handle --config argument
     if args.config:
         config_path = Path(args.config)

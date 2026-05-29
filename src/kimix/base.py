@@ -8,9 +8,10 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from kimi_cli.wire.types import (
     ApprovalRequest,
@@ -31,6 +32,9 @@ from kimi_cli.wire.types import (
     ToolCallPart,
     ToolResult,
 )
+
+if TYPE_CHECKING:
+    from kimi_agent_sdk import Session
 
 _threads: list[threading.Thread] = []
 
@@ -97,12 +101,71 @@ class Style(Enum):
     STRIKETHROUGH = 9
 
 
+@dataclass(frozen=True)
+class Color256:
+    """256-color mode (8-bit) foreground color."""
+    value: int
+
+
+@dataclass(frozen=True)
+class BgColor256:
+    """256-color mode (8-bit) background color."""
+    value: int
+
+
+@dataclass(frozen=True)
+class TrueColor:
+    """24-bit true color (RGB) foreground."""
+    r: int
+    g: int
+    b: int
+
+    @classmethod
+    def from_hex(cls, hex_color: str) -> "TrueColor":
+        hex_color = hex_color.lstrip("#")
+        return cls(
+            int(hex_color[0:2], 16),
+            int(hex_color[2:4], 16),
+            int(hex_color[4:6], 16),
+        )
+
+
+@dataclass(frozen=True)
+class BgTrueColor:
+    """24-bit true color (RGB) background."""
+    r: int
+    g: int
+    b: int
+
+    @classmethod
+    def from_hex(cls, hex_color: str) -> "BgTrueColor":
+        hex_color = hex_color.lstrip("#")
+        return cls(
+            int(hex_color[0:2], 16),
+            int(hex_color[2:4], 16),
+            int(hex_color[4:6], 16),
+        )
+
+
+# Common 256-color grayscale colors (232-255)
+GRAY_NEAR_BLACK = Color256(232)
+GRAY_DARK = Color256(240)
+GRAY = Color256(245)
+GRAY_LIGHT = Color256(250)
+GRAY_NEAR_WHITE = Color256(253)
+
+# Common true color grayscale
+TRUE_GRAY = TrueColor(128, 128, 128)
+
+
 _ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+
 
 def _strip_ansi(text: str) -> str:
     if "\x1b" not in text:
         return text
     return _ANSI_ESCAPE.sub("", text)
+
 
 _colorful_print = True
 _print_func: Callable = print
@@ -111,31 +174,60 @@ _print_func: Callable = print
 def print(*values: object, sep: str | None = " ", end: str | None = "\n", file: Any = None, flush: bool = False):
     _print_func(*values, sep=sep, end=end, file=file, flush=flush)
 
+
 @functools.lru_cache(maxsize=256)
-def _ansi_prefix(fg_value: int | None, bg_value: int | None, styles_tuple: tuple[int, ...]) -> str | None:
-    codes: list[int] = []
+def _ansi_prefix(
+    fg_value: int | str | None,
+    bg_value: int | str | None,
+    styles_tuple: tuple[int, ...],
+) -> str | None:
+    codes: list[str] = []
     if styles_tuple:
-        codes.extend(styles_tuple)
+        codes.extend(map(str, styles_tuple))
     if fg_value is not None:
-        codes.append(fg_value)
+        codes.append(str(fg_value))
     if bg_value is not None:
-        codes.append(bg_value)
+        codes.append(str(bg_value))
     if codes:
-        return f"\033[{';'.join(map(str, codes))}m"
+        return f"\033[{';'.join(codes)}m"
+    return None
+
+
+def _resolve_fg(color: Color | Color256 | TrueColor | None) -> int | str | None:
+    if color is None:
+        return None
+    if isinstance(color, Color):
+        return color.value
+    if isinstance(color, Color256):
+        return f"38;5;{color.value}"
+    if isinstance(color, TrueColor):
+        return f"38;2;{color.r};{color.g};{color.b}"
+    return None
+
+
+def _resolve_bg(color: BgColor | BgColor256 | BgTrueColor | None) -> int | str | None:
+    if color is None:
+        return None
+    if isinstance(color, BgColor):
+        return color.value
+    if isinstance(color, BgColor256):
+        return f"48;5;{color.value}"
+    if isinstance(color, BgTrueColor):
+        return f"48;2;{color.r};{color.g};{color.b}"
     return None
 
 
 def colorful_text(
     text: str,
-    fg: Color | None = None,
-    bg: BgColor | None = None,
+    fg: Color | Color256 | TrueColor | None = None,
+    bg: BgColor | BgColor256 | BgTrueColor | None = None,
     styles: list[Style] | None = None,
 ) -> str:
     if not _colorful_print:
         return text
     prefix = _ansi_prefix(
-        fg.value if fg else None,
-        bg.value if bg else None,
+        _resolve_fg(fg),
+        _resolve_bg(bg),
         tuple(s.value for s in styles) if styles else (),
     )
     if prefix:
@@ -145,8 +237,8 @@ def colorful_text(
 
 def colorful_print(
     text: str,
-    fg: Color | None = None,
-    bg: BgColor | None = None,
+    fg: Color | Color256 | TrueColor | None = None,
+    bg: BgColor | BgColor256 | BgTrueColor | None = None,
     styles: list[Style] | None = None,
     end: str = "\n",
     file: Any = None,
@@ -158,11 +250,13 @@ def colorful_print(
     text = colorful_text(text, fg, bg, styles)
     _print_func(text, end=end, file=file, flush=flush)
 
+
 class StreamPrintState(Enum):
     Text = 0
     Thinking = 1
     Other = 2
-    
+
+
 class PrintStream:
     """A stream wrapper that tracks whether the last printed character was a newline.
 
@@ -192,12 +286,14 @@ class PrintStream:
         self._last_char_was_newline = _strip_ansi(check_word).endswith('\n')
 
     def colorful_print_word(
-        self, word: str,
-        require_new_line: bool,
-        fg: Color | None = None,
-        bg: BgColor | None = None,
-        styles: list[Style] | None = None) -> None:
-        self.print_word(colorful_text(word, fg, bg, styles), require_new_line=require_new_line, raw_word=word)
+            self, word: str,
+            require_new_line: bool,
+            fg: Color | Color256 | TrueColor | None = None,
+            bg: BgColor | BgColor256 | BgTrueColor | None = None,
+            styles: list[Style] | None = None) -> None:
+        self.print_word(colorful_text(word, fg, bg, styles),
+                        require_new_line=require_new_line, raw_word=word)
+
 
 _quiet = False
 
@@ -249,6 +345,35 @@ _stream = PrintStream()
 
 
 _TOOL_TYPES = (ToolCall, ToolCallPart, ToolResult)
+_PRINT_AGENT_JSON_MESSAGE_TYPE_ATTR = "_kimix_print_agent_json_message_type"
+
+
+def _message_transition_type(wire_msg: Any) -> MessageType | None:
+    if isinstance(wire_msg, TextPart):
+        return MessageType.Text
+    if isinstance(wire_msg, ThinkPart):
+        return MessageType.Thinking
+    if isinstance(wire_msg, _TOOL_TYPES):
+        return MessageType.ToolCalling
+    return None
+
+
+def _print_transition_usage(session: Session, message_type: MessageType | None) -> None:
+    if message_type is None:
+        return
+    previous_type = getattr(session, _PRINT_AGENT_JSON_MESSAGE_TYPE_ATTR, None)
+    if previous_type is not None and previous_type != message_type:
+        split_str = '=' * 20
+        usage = percentage_and_token(session)
+        left = f"{split_str} Context usage: {usage} "
+        target_width = 80
+        right_split = '=' * max(target_width - len(left), 1)
+        _stream.colorful_print_word(
+            f"{left}{right_split}\n",
+            fg=Color.BRIGHT_BLACK,
+            require_new_line=True,
+        )
+    setattr(session, _PRINT_AGENT_JSON_MESSAGE_TYPE_ATTR, message_type)
 
 
 def _format_display_blocks(display: list[Any]) -> str | None:
@@ -265,7 +390,8 @@ def _format_display_blocks(display: list[Any]) -> str | None:
             if block.text:
                 parts.append(colorful_text(block.text, fg=Color.BRIGHT_BLACK))
         elif isinstance(block, DiffDisplayBlock):
-            parts.append(colorful_text(f"Diff: {block.path}", fg=Color.BRIGHT_YELLOW))
+            parts.append(colorful_text(
+                f"Diff: {block.path}", fg=Color.BRIGHT_YELLOW))
             for line in block.old_text.splitlines():
                 parts.append(colorful_text(f"- {line}", fg=Color.BRIGHT_RED))
             for line in block.new_text.splitlines():
@@ -274,16 +400,21 @@ def _format_display_blocks(display: list[Any]) -> str | None:
             for item in block.items:
                 status = item.status.replace("_", " ").lower()
                 if status == "done":
-                    parts.append(colorful_text(f"- ~~{item.title}~~", fg=Color.BRIGHT_BLACK))
+                    parts.append(colorful_text(
+                        f"- ~~{item.title}~~", fg=Color.BRIGHT_BLACK))
                 elif status == "in progress":
-                    parts.append(colorful_text(f"- {item.title} \u2190", fg=Color.BRIGHT_YELLOW))
+                    parts.append(colorful_text(
+                        f"- {item.title} \u2190", fg=Color.BRIGHT_YELLOW))
                 else:
-                    parts.append(colorful_text(f"- {item.title}", fg=Color.BRIGHT_BLACK))
+                    parts.append(colorful_text(
+                        f"- {item.title}", fg=Color.BRIGHT_BLACK))
         elif isinstance(block, ShellDisplayBlock):
-            parts.append(colorful_text(f"$ {block.command}", fg=Color.BRIGHT_BLUE))
+            parts.append(colorful_text(
+                f"$ {block.command}", fg=Color.BRIGHT_BLUE))
         elif isinstance(block, BackgroundTaskDisplayBlock):
             parts.append(
-                colorful_text(f"[{block.status}] {block.task_id}: {block.description}", fg=Color.BRIGHT_BLACK)
+                colorful_text(
+                    f"[{block.status}] {block.task_id}: {block.description}", fg=Color.BRIGHT_BLACK)
             )
         elif isinstance(block, UnknownDisplayBlock):
             parts.append(colorful_text(str(block.data), fg=Color.BRIGHT_BLACK))
@@ -305,9 +436,12 @@ def _format_tool_result(result: ToolResult) -> str:
 def _handle_tool_call(wire_msg: ToolCall, output_function: Callable[[str, MessageType], Any] | None) -> None:
     name = wire_msg.function.name
     header = f"⚡ {name}"
-    _stream.colorful_print_word(header, fg=Color.BRIGHT_MAGENTA, require_new_line=True)
+    _stream.colorful_print_word(
+        header, fg=Color.BRIGHT_MAGENTA, require_new_line=True)
+    _stream._state = StreamPrintState.Other
     if output_function:
-        output_function(f"{name} {wire_msg.function.arguments or ''}", MessageType.ToolCalling)
+        output_function(
+            f"{name} {wire_msg.function.arguments or ''}", MessageType.ToolCalling)
 
 
 def _handle_tool_call_part(wire_msg: ToolCallPart, output_function: Callable[[str, MessageType], Any] | None) -> None:
@@ -315,6 +449,7 @@ def _handle_tool_call_part(wire_msg: ToolCallPart, output_function: Callable[[st
     if output_function and part:
         output_function(part, MessageType.ToolCallingPart)
     _stream.print_word('', True)
+    _stream._state = StreamPrintState.Other
 
 
 def _handle_tool_result(wire_msg: ToolResult, output_function: Callable[[str, MessageType], Any] | None) -> None:
@@ -331,6 +466,7 @@ def _handle_tool_result(wire_msg: ToolResult, output_function: Callable[[str, Me
         )
     else:
         _stream.print_word('', True)
+    _stream._state = StreamPrintState.Other
     if output_function:
         formatted = f"[ToolResult] {_format_tool_result(wire_msg)}"
         if formatted:
@@ -346,7 +482,8 @@ def _handle_noop(_wire_msg: Any, _output_function: Callable[[str, MessageType], 
 
 
 def _handle_compaction_begin(_wire_msg: Any, _output_function: Callable[[str, MessageType], Any] | None) -> None:
-    _stream.colorful_print_word("Compacting...", require_new_line=True, fg=Color.BRIGHT_MAGENTA)
+    _stream.colorful_print_word(
+        "Compacting...", require_new_line=True, fg=Color.BRIGHT_MAGENTA)
 
 
 def _handle_think_part(wire_msg: ThinkPart, output_function: Callable[[str, MessageType], Any] | None) -> None:
@@ -355,9 +492,11 @@ def _handle_think_part(wire_msg: ThinkPart, output_function: Callable[[str, Mess
         if output_function:
             output_function(think_content, MessageType.Thinking)
         if _stream._state != StreamPrintState.Thinking:
-            _stream.colorful_print_word(f"[Think] {think_content}", fg=Color.BRIGHT_CYAN, require_new_line=True)
+            _stream.colorful_print_word(
+                f"[Think] {think_content}", fg=Color.BRIGHT_CYAN, require_new_line=True)
         else:
-            _stream.colorful_print_word(f"{think_content}", fg=Color.BRIGHT_CYAN, require_new_line=False)
+            _stream.colorful_print_word(
+                f"{think_content}", fg=Color.BRIGHT_CYAN, require_new_line=False)
         _stream._state = StreamPrintState.Thinking
 
 
@@ -365,7 +504,8 @@ def _handle_text_part(wire_msg: TextPart, output_function: Callable[[str, Messag
     chunk = wire_msg.text
     if output_function:
         output_function(chunk, MessageType.Text)
-    _stream.print_word(chunk, require_new_line=_stream._state != StreamPrintState.Text)
+    _stream.print_word(
+        chunk, require_new_line=_stream._state != StreamPrintState.Text)
     _stream._state = StreamPrintState.Text
 
 
@@ -388,13 +528,17 @@ _PRINT_AGENT_JSON_DISPATCH: dict[type, Callable[[Any, Callable[[str, MessageType
 
 
 def print_agent_json(
-    wire_msg: Any, output_function: Callable[[str, MessageType], Any] | None = None
+    wire_msg: Any,
+    session: Session,
+    output_function: Callable[[str, MessageType], Any] | None = None,
 ) -> None:
+    _print_transition_usage(session, _message_transition_type(wire_msg))
     handler = _PRINT_AGENT_JSON_DISPATCH.get(type(wire_msg))
     if handler is not None:
         handler(wire_msg, output_function)
     else:
         _handle_other(wire_msg, output_function)
+
 
 def run_thread(
     function: Callable[..., Any], args: tuple[Any, ...] | None = None
@@ -429,7 +573,8 @@ def sync_all() -> None:
 def _run_process_with_log(command: str) -> tuple[str, int]:
     print_info(f"Shell: {command}")
     result = subprocess.run(command, shell=True, capture_output=True)
-    output = result.stdout.decode("utf-8", errors="replace") if result.stdout else ""
+    output = result.stdout.decode(
+        "utf-8", errors="replace") if result.stdout else ""
     if result.stderr:
         output += "\n" + result.stderr.decode("utf-8", errors="replace")
     return output, result.returncode
@@ -579,6 +724,7 @@ def get_skill_dirs(use_kaos_path: bool = True) -> list[Any]:
             return [KaosPath(str(d)) for d in _default_skill_dirs]
         return _default_skill_dirs
     return []
+
 
 generate_memory = """---
 

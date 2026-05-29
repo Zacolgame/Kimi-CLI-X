@@ -262,8 +262,10 @@ from kimix.base import print_agent_json
 # - ThinkPart: prints thinking content in cyan (suppressed if _quiet)
 # - TextPart: prints text chunks directly
 # - ToolCall, ToolCallPart, ToolResult: calls output_function with MessageType.ToolCalling
+# - Type transitions: prints black context usage/token count using the provided session
 print_agent_json(
     wire_msg=message,
+    session=session,
     output_function=custom_handler  # Optional: callback(text, MessageType) for text/think/tool content
 )
 ```

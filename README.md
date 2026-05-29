@@ -1,128 +1,126 @@
 # Kimi-CLI-X
 
-## 源码安装
+> [中文文档](README_zh.md)
+
+## Install from Source
 ```bash
 python install.py
 ```
 
-## pip 安装
+## pip Install
 ```bash
-# 安装
 pip install kimix
-# 运行
 python -m kimix.cli
-# 或
+# or
 kimix
 python -m kimix
 ```
 
-注意！这个仓库不止支持 KIMI LLM，支持各类 API Key !!! 各类默认 config 模板在 `docs/`, 配置后通过 `kimix --config xx.json` 即可使用 !
+> **Note:** This repo supports not only KIMI LLM but also various API keys! Like OpenAI, Anthropic, etc. Default config templates are in `docs/`; use `kimix --config xx.json` after setup.
 
 ![teasor](teasor.png)
-## 为什么选择 Kimi-CLI-X？
 
-Kimi-CLI-X 在原版 Kimi-CLI 基础上，围绕**提示词效率**、**工具可靠性**与**可扩展性**进行了深度优化，并补充了多款面向实际开发场景的工具。
+## Why Kimi-CLI-X?
 
-### 优化
+Kimi-CLI-X is a deep optimization of the original Kimi-CLI, focusing on **prompt efficiency**, **tool reliability**, and **extensibility**, plus new tools for real-world development.
 
-1. **精简系统提示词** — 压缩初始提示词与工具说明的篇幅，保证信息完整的同时让上下文更干净，覆盖几乎全部内置工具的同时，将初始化 token 降到 2000 左右。
-2. **强化权限与校验** — 妥善处理 Shell、Glob 等工具的校验和权限问题，减少因失败导致的反复修正。
-3. **优化子进程输出** — 主动将大量输出重定向到临时文件，过滤冗余日志，便于后端检索。
-4. **简化并发架构** — 理顺子进程、子代理与后台多任务的设计，使多任务调度更直观可控。
-5. **可编程提示词** — 支持在上层自定义、注入系统提示词，灵活适配不同场景。
-6. **显式对话管理** — 提供更清晰的多任务编排与对话状态追踪，降低复杂交互的隐晦性。
-7. **写入即校验** — 对格式严格的配置文件自动触发格式检查和警告，防止因模型幻觉产生错误。
-8. **兼容多种 API** — 支持直接导入自定义配置，兼容 OpenAI、Anthropic 等多种 API 格式。
-9. **快速兼容多家API Key** — 已覆盖测试验证的全部后端（kimi、anthropic、openai_legacy、openai_responses、google_genai、vertexai 等），详见 `kimi-cli\tests\core\test_create_llm.py`。
+### Optimizations
 
-### 新增
+1. **Lean system prompts** — Compressed initial prompts and tool descriptions down to ~2000 tokens while covering nearly all built-in tools.
+2. **Hardened permissions & validation** — Properly handles Shell, Glob, and other tool validations to reduce retry loops from failures.
+3. **Better subprocess output** — Redirects large outputs to temp files and filters redundant logs for easier backend retrieval.
+4. **Simpler concurrency** — Streamlined design for subprocesses, sub-agents, and background tasks.
+5. **Programmable prompts** — Allows custom system prompt injection at the upper layer for flexible scenarios.
+6. **Explicit conversation management** — Clearer multi-task orchestration and state tracking.
+7. **Write-and-validate** — Auto format checks and warnings on strict config files to prevent model-hallucinated errors.
+8. **Multi-API support** — Import custom configs compatible with OpenAI, Anthropic, and more.
+9. **Verified backends** — Tested against kimi, anthropic, openai_legacy, openai_responses, google_genai, vertexai, etc. See `kimi-cli/tests/core/test_create_llm.py`.
 
-| 能力 | 说明 |
-|------|------|
-| **Input 工具** | 与运行中的进程进行 TUI 交互。 |
-| **Docx / PDF 转换** | 内置文档格式转换，无需外部依赖。 |
-| **Python 脚本执行** | 允许 Agent 直接执行 Python 脚本。 |
-| **错误记录** | 记录工具调用错误，供模型回溯与改进。 |
-| **脚本系统** | 将提示词与 Python 逻辑结合，编排复杂任务。 |
-| **增强网页抓取 (FetchURL)** | 基于无头浏览器输出 Markdown（而非纯文本），支持 `output_path` 直接落盘与超长内容自动截断；零外部服务依赖，更稳更轻。 |
+### New Capabilities
 
+| Capability | Description |
+|------------|-------------|
+| **Input tool** | TUI interaction with running processes. |
+| **Docx / PDF conversion** | Built-in document conversion without external deps. |
+| **Python script execution** | Agent can run Python scripts directly. |
+| **Error logging** | Records tool-call errors for model backtracking and improvement. |
+| **Script system** | Combines prompts with Python logic to orchestrate complex tasks. |
+| **Enhanced web fetch (FetchURL)** | Headless-browser-based Markdown output (not plain text), supports `output_path` and auto-truncation for超长 content; zero external service dependency. |
 
-### 脚本化工作流（核心优势）
+### Scriptable Workflows (Core Advantage)
 
-与需要人工逐条输入命令的 CLI 交互不同，**Kimi-CLI-X 允许你直接编写 Python 脚本来编排整个工作流**。你可以将提示词、循环、条件判断和工具调用组合在一起，实现全自动、可复现的任务编排：
+Unlike traditional CLI interaction where you type commands one by one, **Kimi-CLI-X lets you write Python scripts to orchestrate entire workflows**. You can combine prompts, loops, conditionals, and tool calls into fully automated, reproducible task pipelines:
 
 ```python
 from kimix import *
 from pathlib import Path
 
-# clear cli session, make an empty context.
 clear_default_context()
 
 for i in Path('docs').glob('*.md'):
-    prompt(f'''
-according to the new git commits, update document `{i}`
-''')
+    prompt(f'''According to the new git commits, update document `{i}`''')
 ```
 
-这种方式的优势在于：
+Benefits:
 
-- **批量自动化**：结合 Python 的原生语法（如 `for` 循环、文件遍历），一次性向多个目标文件发起任务，无需人工等待和重复输入。
-- **编排复杂流程**：在脚本中自由组合模式切换、工具调用与逻辑判断，构建多阶段、多分支的复杂工作流。
-- **可复现与可维护**：工作流以脚本形式保存，可纳入版本控制，随时复用、修改和分享，而不是依赖临时的对话历史。
+- **Batch automation**: Use native Python syntax (`for` loops, file globbing) to fire tasks at multiple files at once.
+- **Complex orchestration**: Freely compose mode switches, tool calls, and logic into multi-stage, multi-branch workflows.
+- **Reproducible & maintainable**: Workflows live as version-controlled scripts, not ephemeral chat history.
 
 ---
 
-### 上下文记忆架构
+### Context Memory Architecture
 
-Kimi-CLI-X 在 `KimiSoul` 核心循环中内建了一套**自动上下文记忆系统**，无需用户手动干预即可在长对话中保持连贯性。其核心由三层机制协同构成：
+Kimi-CLI-X embeds an **automatic context memory system** inside the `KimiSoul` core loop, keeping long conversations coherent without manual intervention. Three layers work together:
 
-#### 1. 对话历史索引（HistoryIndex）
+#### 1. Conversation History Index (HistoryIndex)
 
-每条 user/assistant 消息在追加到上下文时自动被 **BM25 倒排索引**（N-gram, n=2）收录，持久化到 `<session>/history_index/<id>.json`，进程重启不丢失。索引上限 500 轮，超出后自动淘汰最旧条目。
+Every user/assistant message is automatically indexed by **BM25 inverted index** (N-gram, n=2) on append, persisted to `<session>/history_index/<id>.json`, and survives process restarts. Cap at 500 rounds; oldest evicted automatically.
 
-#### 2. 上下文自动压缩（SimpleCompaction）
+#### 2. Automatic Context Compaction (SimpleCompaction)
 
-当上下文 token 占比触及 `compaction_trigger_ratio` 或剩余空间不足 `reserved_context_size` 时，自动触发压缩：
+Triggered when context token ratio hits `compaction_trigger_ratio` or free space falls below `reserved_context_size`:
 
-- **保留策略**：最近 N 轮对话原样保留（深度由 `adaptive_preserve_depth` 自适应决定——检测到错误、thinking、多文件编辑等信号时自动加深）；同时始终保留首条消息（首因效应）。
-- **LLM 摘要**：旧消息通过一次轻量 LLM 调用压缩为结构化摘要，丢弃 thinking 部分。
-- **级联处理**：当已压缩内容再次被压缩（深度 ≥3），自动切换为 `COMPACT_CASCADE` 提示词防止信息退化。
-- 压缩后，所有轮次在 HistoryIndex 中标记为 `is_compacted`，供后续检索。
+- **Retention policy**: Recent N rounds kept verbatim (depth adapted by `adaptive_preserve_depth` — deepened on errors, thinking, multi-file edits, etc.); first message always kept (primacy effect).
+- **LLM summarization**: Old messages compressed into structured summaries via a lightweight LLM call; thinking blocks discarded.
+- **Cascade handling**: When already-compacted content is compressed again (depth ≥3), switches to `COMPACT_CASCADE` prompt to prevent information degradation.
+- Post-compaction, all rounds marked `is_compacted` in HistoryIndex for future retrieval.
 
-#### 3. 自动历史检索 + 按需召回
+#### 3. Auto History Retrieval + On-Demand Recall
 
-- **自动检索**（`_maybe_auto_retrieve_history`）：每轮第一步，若用户输入 ≥10 字符，自动在 HistoryIndex 中 BM25 搜索匹配的已压缩轮次，得分超过 `auto_retrieve_history_threshold` 时以 `[Auto-retrieved from past conversation]` 形式注入上下文。
-- **ContextRetrieval 工具**：Agent 可主动调用，按自然语言查询搜索全部归档历史（含已压缩轮次），返回原文摘录及相关性得分。
+- **Auto retrieval** (`_maybe_auto_retrieve_history`): Each round, if user input ≥10 chars, BM25-searches HistoryIndex for matching compacted rounds; injects matches above `auto_retrieve_history_threshold` as `[Auto-retrieved from past conversation]`.
+- **ContextRetrieval tool**: Agent can actively search all archived history (including compacted rounds) by natural-language query, returning verbatim excerpts with relevance scores.
 
 ```
 ┌──────────────┐    append     ┌──────────────┐    overflow    ┌──────────────────┐
 │   Context    │ ───────────► │ HistoryIndex │ ────────────► │ SimpleCompaction │
-│  (实时窗口)   │              │ (BM25 索引)   │               │  (LLM 摘要压缩)   │
+│ (live window)│              │ (BM25 index) │               │ (LLM summary)    │
 └──────────────┘              └──────────────┘               └──────────────────┘
        ▲                            │                               │
        │       auto-retrieve        │                               │
        └────────────────────────────┘                               │
-       │              ContextRetrieval (Agent 主动召回)              │
+       │              ContextRetrieval (agent主动recall)            │
        └────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 文档索引
+## Documentation Index
 
-### 教程系列
+### Tutorials
 
-| 文档 | 简介 |
-|------|------|
-| [`docs/tutorials/1_quick_start.md`](docs/tutorials/1_quick_start.md) | **快速入门指南**。涵盖 Git Submodule 拉取、`uv` 环境安装、CLI 启动参数与交互命令的完整说明。 |
-| [`docs/tutorials/2_long_task.md`](docs/tutorials/2_long_task.md) | **Long Task**。KimiX 对于长任务的策略。 |
-| [`docs/tutorials/3_builtin_tools.md`](docs/tutorials/3_builtin_tools.md) | **内置工具完全指南**。系统介绍 Agent 的全部内置工具（文件 I/O、搜索、代码执行、进程管理、文档转换、计划模式、子代理等），并给出提示词引导策略与最佳实践。 |
-| [`docs/tutorials/4_skills.md`](docs/tutorials/4_skills.md) | **自定义 Skill 编写教程**。讲解 Skill 的设计原则、目录结构、`SKILL.md` 编写规范、附属资源组织方式、测试打包流程及安装使用方法。 |
-| [`docs/tutorials/5_server.md`](docs/tutorials/5_server.md) | **JSON-RPC 服务端教程**。介绍基于 TCP 的 JSON-RPC 2.0 协议格式、错误码、服务端接口、WebSocket 桥接及命令行启动参数。 |
+| Document | Description |
+|----------|-------------|
+| [`docs/tutorials/1_quick_start_en.md`](docs/tutorials/1_quick_start_en.md) | Quick start guide: Git submodules, `uv` env setup, CLI args, and interactive commands. |
+| [`docs/tutorials/2_long_task_en.md`](docs/tutorials/2_long_task_en.md) | Long task strategy in KimiX. |
+| [`docs/tutorials/3_builtin_tools_en.md`](docs/tutorials/3_builtin_tools_en.md) | Complete built-in tool guide: file I/O, search, code execution, process management, doc conversion, plan mode, sub-agents, plus prompt strategies and best practices. |
+| [`docs/tutorials/4_skills_en.md`](docs/tutorials/4_skills_en.md) | Custom skill authoring: design principles, directory structure, `SKILL.md` spec, resource organization, testing, packaging, and installation. |
+| [`docs/tutorials/5_server_en.md`](docs/tutorials/5_server_en.md) | HTTP server tutorial: FastAPI + SSE, OpenCode-compatible REST API, session management, event streaming, SSE CLI debugger, dummy mode, and client implementation. |
 
-### 配置参考
+### Config Reference
 
-| 文件 | 简介 |
-|------|------|
-| [`docs/config.json`](docs/config.json) | 模型配置示例文件，包含 `model`、`url`、`api_key`、`capabilities` 等字段，可供编写自定义配置时参考。 |
-
+| File | Description |
+|------|-------------|
+| [`docs/config.json`](docs/config.json) | Sample model config with `model`, `url`, `api_key`, `capabilities`, etc. |
+| [`.kimix/config.json`](.kimix/config.json) | Workspace behavior config: `protected_write_paths`, `protected_read_paths`, `forbidden_commands`, etc. |
+| [`.kimix/skill.json`](.kimix/skill.json) | Workspace skill directory config: `skill_dir` field (string or array) for extra skill directories, resolved relative to workspace. |

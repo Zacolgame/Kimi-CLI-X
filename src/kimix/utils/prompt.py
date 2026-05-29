@@ -121,7 +121,7 @@ async def prompt_async(
                     if cancel_callable is not None and cancel_callable():
                         session.cancel()
                         break
-                    print_agent_json(message, output_function)
+                    print_agent_json(message, session, output_function)
                 base._stream.print_word('\n', require_new_line=True)
                 if info_print:
                     end_time = time.time()
