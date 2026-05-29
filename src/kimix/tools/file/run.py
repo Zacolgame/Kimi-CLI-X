@@ -39,8 +39,8 @@ _DEFAULT_FORBIDDEN_COMMANDS = [
 
 
 class RunParams(BaseModel):
-    path: str = Field(
-        description="Executable path."
+    executable: str = Field(
+        description="Executable path or application name (no need for a full path)."
     )
     args: list[str] = Field(
         default_factory=list,
@@ -86,14 +86,14 @@ class Run(CallableTool2[RunParams]):
         import os
         script_path: str | None = None
         try:
-            # params.path may contain arguments, split it respecting quotes, then insert to the start of params.args
+            # params.executable may contain arguments, split it respecting quotes, then insert to the start of params.args
             # Try progressively longer prefixes to find an existing file, so paths with spaces are handled.
-            if " " in params.path:
+            if " " in params.executable:
                 try:
                     import sys
-                    parts = shlex.split(params.path, posix=os.name != "nt")
+                    parts = shlex.split(params.executable, posix=os.name != "nt")
                 except ValueError:
-                    parts = params.path.split(" ")
+                    parts = params.executable.split(" ")
                 candidate = parts[0]
                 for i in range(1, len(parts)):
                     candidate += " " + parts[i]
@@ -102,25 +102,25 @@ class Run(CallableTool2[RunParams]):
                     except OSError:
                         is_file = False
                     if is_file:
-                        params.path = candidate
+                        params.executable = candidate
                         remaining = parts[i + 1 :]
                         if remaining:
                             params.args = remaining + params.args
                         break
                 else:
-                    params.path = parts[0]
+                    params.executable = parts[0]
                     remaining = parts[1:]
                     if remaining:
                         params.args = remaining + params.args
 
             display_args = [arg[:100] + '...' if len(arg) > 100 else arg for arg in params.args]
-            cmd_str = shlex.join([params.path] + display_args)
-            display_cmd = params.path if len(cmd_str) > _HUGE_CMD_THRESHOLD else cmd_str
+            cmd_str = shlex.join([params.executable] + display_args)
+            display_cmd = params.executable if len(cmd_str) > _HUGE_CMD_THRESHOLD else cmd_str
 
             # Check forbidden commands (default + user-configured)
             forbidden_commands = _DEFAULT_FORBIDDEN_COMMANDS + self._session.custom_config.get("config_json", {}).get("forbidden_commands", [])
             if forbidden_commands:
-                full_cmd = " ".join([params.path] + params.args)
+                full_cmd = " ".join([params.executable] + params.args)
                 normalized_cmd = " ".join(full_cmd.split())
                 cmd_tokens = normalized_cmd.split()
                 for forbidden in forbidden_commands:
@@ -137,35 +137,35 @@ class Run(CallableTool2[RunParams]):
                             brief=display_cmd,
                         )
 
-            # Check if params.path is a valid process name first (executable in PATH or existing file),
+            # Check if params.executable is a valid process name first (executable in PATH or existing file),
             # then fall back to bash built-in commands.
             import shutil
 
             is_process = False
             is_py = False
-            if (params.path == 'python' and (shutil.which('python') is None) and (not Path('./python').exists())) or (params.path == 'python.exe' and (shutil.which('python.exe') is None) and (not Path('./python.exe').exists())):
-                params.path = sys.executable
+            if (params.executable == 'python' and (shutil.which('python') is None) and (not Path('./python').exists())) or (params.executable == 'python.exe' and (shutil.which('python.exe') is None) and (not Path('./python.exe').exists())):
+                params.executable = sys.executable
                 is_process = True
                 is_py = True
-            elif os.sep in params.path or "/" in params.path:
+            elif os.sep in params.executable or "/" in params.executable:
                 # Contains path separator - check if it's an existing file
-                is_process = Path(params.path).is_file()
+                is_process = Path(params.executable).is_file()
             else:
                 # Bare command name - check if it's in PATH
-                is_process = shutil.which(params.path) is not None
+                is_process = shutil.which(params.executable) is not None
 
             if not is_process:
                 # Not a real process - check if it's a bash built-in command.
                 # Check original command name first, then try Windows alias.
                 warning = " WARNING: This tool does not support shell commands; use `Python` tool."
-                if params.path in _BASH_COMMANDS:
+                if params.executable in _BASH_COMMANDS:
                     result = await run_bash(params, self._session)
                     return ToolReturnValue(
                         is_error=result.is_error,
                         message=(result.message or "") + warning, brief=result.brief or "", output=result.output,
                         display=result.display
                     )
-                bash_name = _WINDOWS_ALIASES.get(params.path, params.path)
+                bash_name = _WINDOWS_ALIASES.get(params.executable, params.executable)
                 if bash_name in _BASH_COMMANDS:
                     result = await run_bash(params, self._session)
                     return ToolReturnValue(
@@ -176,7 +176,7 @@ class Run(CallableTool2[RunParams]):
                 else:
                     return ToolError(
                         output="",
-                        message=f"Command not found: '{params.path}' is not a valid executable or bash built-in command." + warning,
+                        message=f"Command not found: '{params.executable}' is not a valid executable or bash built-in command." + warning,
                         brief=display_cmd,
                     )
 
@@ -201,8 +201,8 @@ class Run(CallableTool2[RunParams]):
                             env_dict[key] = value
                         else:
                             env_dict[item] = '1'
-                task = ProcessTask(params.path, params.args, params.cwd, env_dict)
-                task_id = await task.start(self._session, "run", Path(params.path).stem)
+                task = ProcessTask(params.executable, params.args, params.cwd, env_dict)
+                task_id = await task.start(self._session, "run", Path(params.executable).stem)
 
                 if params.run_in_background:
                     return ToolOk(

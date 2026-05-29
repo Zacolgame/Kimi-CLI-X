@@ -429,7 +429,7 @@ class TestRunToolAsync:
 
     async def test_foreground_run_awaits_all_async_calls(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
-        params = RunParams(path=sys.executable, args=["-c", "print('run_async')"], timeout=10)
+        params = RunParams(executable=sys.executable, args=["-c", "print('run_async')"], timeout=10)
         result = await tool(params)
         assert isinstance(result, ToolOk)
         assert "run_async" in str(result.output)

@@ -29,8 +29,8 @@ async def run_bash(params: "BashParams | RunParams", session: Session) -> ToolRe
         remove_task_id,
     )
 
-    # Normalize: accept both BashParams.cmd and RunParams.path
-    cmd: str = getattr(params, 'cmd', None) or getattr(params, 'path', '')
+    # Normalize: accept both BashParams.cmd and RunParams.executable
+    cmd: str = getattr(params, 'cmd', None) or getattr(params, 'executable', '')
 
     # Resolve command - check builtin map first, then try Windows alias
     bash_tool: CallableTool2 | None = BASH_COMMANDS.get(cmd)

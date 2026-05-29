@@ -125,13 +125,13 @@ class TestTaskOutput:
 class TestRun:
     async def test_foreground_success(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
-        params = RunParams(path=sys.executable, args=["-c", "print('hello_run')"], timeout=10)
+        params = RunParams(executable=sys.executable, args=["-c", "print('hello_run')"], timeout=10)
         result = await tool(params)
         assert "hello_run" in str(result.output)
 
     async def test_foreground_failure(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
-        params = RunParams(path=sys.executable, args=["-c", "import sys; sys.exit(1)"], timeout=10)
+        params = RunParams(executable=sys.executable, args=["-c", "import sys; sys.exit(1)"], timeout=10)
         result = await tool(params)
         assert "failed" in str(result.message).lower() or "exited" in str(result.output).lower()
 
