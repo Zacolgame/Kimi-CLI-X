@@ -152,7 +152,6 @@ GRAY_NEAR_BLACK = Color256(232)
 GRAY_DARK = Color256(240)
 GRAY = Color256(245)
 GRAY_LIGHT = Color256(250)
-GRAY_NEAR_WHITE = Color256(253)
 
 # Common true color grayscale
 TRUE_GRAY = TrueColor(128, 128, 128)
@@ -370,7 +369,7 @@ def _print_transition_usage(session: Session, message_type: MessageType | None) 
         right_split = '=' * max(target_width - len(left), 1)
         _stream.colorful_print_word(
             f"{left}{right_split}\n",
-            fg=Color.BRIGHT_BLACK,
+            fg=GRAY,
             require_new_line=True,
         )
     setattr(session, _PRINT_AGENT_JSON_MESSAGE_TYPE_ATTR, message_type)
@@ -407,7 +406,7 @@ def _format_display_blocks(display: list[Any]) -> str | None:
                         f"- {item.title} \u2190", fg=Color.BRIGHT_YELLOW))
                 else:
                     parts.append(colorful_text(
-                        f"- {item.title}", fg=Color.BRIGHT_BLACK))
+                        f"- {item.title}", fg=GRAY_LIGHT))
         elif isinstance(block, ShellDisplayBlock):
             parts.append(colorful_text(
                 f"$ {block.command}", fg=Color.BRIGHT_BLUE))
@@ -421,7 +420,7 @@ def _format_display_blocks(display: list[Any]) -> str | None:
         elif isinstance(block, DisplayBlock):
             data = block.model_dump()
             if data:
-                parts.append(colorful_text(str(data), fg=Color.BRIGHT_BLACK))
+                parts.append(colorful_text(str(data), fg=GRAY_LIGHT))
     if not parts:
         return None
     return "\n".join(parts) + "\n"

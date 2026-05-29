@@ -53,9 +53,9 @@ def test_print_agent_json_prints_black_usage_when_text_switches_to_thinking(monk
     output = "".join(chunks)
 
     assert output.count("Context usage: 12.5% (1024 tokens)") == 1
-    assert "\033[30mContext usage: 12.5% (1024 tokens)\n\033[0m" in output
+    assert "\x1b[38;5;245m==================== Context usage: 12.5% (1024 tokens) ========================\n\x1b[0m" in output
     assert "hello world" in output
-    assert "[Think] hmm" in output
+    assert "\x1b[96m[Think] hmm\x1b[0m" in output
 
 
 def test_print_agent_json_groups_tool_parts_before_tool_to_text_transition(monkeypatch: Any) -> None:
@@ -73,7 +73,7 @@ def test_print_agent_json_groups_tool_parts_before_tool_to_text_transition(monke
     output = "".join(chunks)
 
     assert output.count("Context usage: 50.0% (4096 tokens)") == 1
-    assert "\033[30mContext usage: 50.0% (4096 tokens)\n\033[0m" in output
+    assert "\x1b[38;5;245m==================== Context usage: 50.0% (4096 tokens) ========================\n\x1b[0m" in output
     assert "⚡ Run" in output
     assert "done" in output
 
