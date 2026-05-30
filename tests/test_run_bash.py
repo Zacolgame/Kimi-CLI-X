@@ -55,7 +55,7 @@ class TestBashParams:
     def test_defaults(self) -> None:
         p = BashParams(cmd="ls")
         assert p.cmd == "ls"
-        assert p.args == []
+        assert p.args == ""
         assert p.timeout == 10
         assert p.output_path is None
         assert p.cwd is None
@@ -252,14 +252,14 @@ class TestRunParams:
     def test_defaults(self) -> None:
         p = RunParams(executable="python")
         assert p.executable == "python"
-        assert p.args == []
+        assert p.args == ""
         assert p.timeout == 10
         assert p.output_path is None
         assert p.cwd is None
         assert p.env is None
 
     def test_full(self) -> None:
-        p = RunParams(executable="/usr/bin/python", args=["-c", "print(1)"], timeout=30,
+        p = RunParams(executable="/usr/bin/python", args="-c print(1)", timeout=30,
                       output_path="/tmp/out", cwd="/tmp", env=["FOO=bar", "DEBUG"])
         assert p.executable == "/usr/bin/python"
         assert p.env == ["FOO=bar", "DEBUG"]
@@ -278,7 +278,7 @@ class TestRunParams:
 class TestRunCall:
     async def test_run_python_print(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
-        params = RunParams(executable=sys.executable, args=["-c", "print('run_ok')"], timeout=15)
+        params = RunParams(executable=sys.executable, args='-c "print(\'run_ok\')"', timeout=15)
         result = await tool(params)
         assert isinstance(result, ToolOk)
         assert "run_ok" in result.output
@@ -286,8 +286,8 @@ class TestRunCall:
     async def test_run_with_env(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
         params = RunParams(
-            path=sys.executable,
-            args=["-c", "import os; print(os.environ.get('KIMIX_TEST_VAR', ''))"],
+            executable=sys.executable,
+            args='-c "import os; print(os.environ.get(\'KIMIX_TEST_VAR\', \'\'))"',
             env=["KIMIX_TEST_VAR=hello_env"],
             timeout=15,
         )
@@ -299,8 +299,8 @@ class TestRunCall:
         """env='DEBUG' should set DEBUG=1."""
         tool = Run(session=mock_session)
         params = RunParams(
-            path=sys.executable,
-            args=["-c", "import os; print(os.environ.get('KIMIX_DEBUG_VAR', 'NOT_SET'))"],
+            executable=sys.executable,
+            args='-c "import os; print(os.environ.get(\'KIMIX_DEBUG_VAR\', \'NOT_SET\'))"',
             env=["KIMIX_DEBUG_VAR"],
             timeout=15,
         )
@@ -311,8 +311,8 @@ class TestRunCall:
     async def test_run_with_cwd(self, mock_session: MagicMock, tmp_path: Path) -> None:
         tool = Run(session=mock_session)
         params = RunParams(
-            path=sys.executable,
-            args=["-c", "import os; print(os.getcwd())"],
+            executable=sys.executable,
+            args="-c \"import os; print(os.getcwd())\"",
             cwd=str(tmp_path),
             timeout=15,
         )
@@ -324,8 +324,8 @@ class TestRunCall:
         out = tmp_path / "output.txt"
         tool = Run(session=mock_session)
         params = RunParams(
-            path=sys.executable,
-            args=["-c", "print('output_file_test')"],
+            executable=sys.executable,
+            args='-c "print(\'output_file_test\')"',
             output_path=str(out),
             timeout=15,
         )
@@ -337,8 +337,8 @@ class TestRunCall:
     async def test_run_nonzero_exit(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
         params = RunParams(
-            path=sys.executable,
-            args=["-c", "import sys; sys.exit(42)"],
+            executable=sys.executable,
+            args='-c "import sys; sys.exit(42)"',
             timeout=15,
         )
         result = await tool(params)
@@ -347,8 +347,8 @@ class TestRunCall:
     async def test_run_timeout(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
         params = RunParams(
-            path=sys.executable,
-            args=["-c", "import time; time.sleep(30)"],
+            executable=sys.executable,
+            args='-c "import time; time.sleep(30)"',
             timeout=3,
         )
         result = await tool(params)
@@ -364,7 +364,7 @@ class TestRunCall:
     async def test_run_python_alias(self, mock_session: MagicMock) -> None:
         """`python` path is replaced with sys.executable."""
         tool = Run(session=mock_session)
-        params = RunParams(executable="python", args=["-c", "print('alias_ok')"], timeout=15)
+        params = RunParams(executable="python", args='-c "print(\'alias_ok\')"', timeout=15)
         result = await tool(params)
         assert isinstance(result, ToolOk)
         assert "alias_ok" in result.output
@@ -372,7 +372,7 @@ class TestRunCall:
     async def test_run_falls_back_to_bash_builtin(self, mock_session: MagicMock) -> None:
         """When not a real process, Run should fall back to bash builtins."""
         tool = Run(session=mock_session)
-        params = RunParams(executable="echo", args=["hello_from_run"], timeout=15)
+        params = RunParams(executable="echo", args="hello_from_run", timeout=15)
         result = await tool(params)
         assert not result.is_error
         assert "hello_from_run" in result.output
@@ -380,7 +380,7 @@ class TestRunCall:
     async def test_run_windows_alias_fallback(self, mock_session: MagicMock) -> None:
         """dir is not a real executable but a Windows alias -> ls."""
         tool = Run(session=mock_session)
-        params = RunParams(executable="dir", args=["."], timeout=10)
+        params = RunParams(executable="dir", args=".", timeout=10)
         result = await tool(params)
         assert not result.is_error
 
@@ -412,7 +412,7 @@ class TestRunCall:
 class TestEdgeCases:
     async def test_run_bash_with_RunParams(self, mock_session: MagicMock) -> None:
         """run_bash accepts RunParams (used by Run.__call__ for fallback)."""
-        params = RunParams(executable="echo", args=["hello_runparams"])
+        params = RunParams(executable="echo", args="hello_runparams")
         result = await run_bash(params, mock_session)
         assert isinstance(result, ToolOk)
         assert "hello_runparams" in result.output
@@ -429,8 +429,8 @@ class TestEdgeCases:
 
         async def one_run(i: int) -> ToolReturnValue:
             params = RunParams(
-                path=sys.executable,
-                args=["-c", f"print('concurrent_{i}')"],
+                executable=sys.executable,
+                args=f'-c "print(\'concurrent_{i}\')"',
                 timeout=15,
             )
             return await tool(params)

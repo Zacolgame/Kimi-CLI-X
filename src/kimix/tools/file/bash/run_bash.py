@@ -31,6 +31,10 @@ async def run_bash(params: "BashParams | RunParams", session: Session) -> ToolRe
 
     # Normalize: accept both BashParams.cmd and RunParams.executable
     cmd: str = getattr(params, 'cmd', None) or getattr(params, 'executable', '')
+    # Normalize args: RunParams.args is str (split later by Run.__call__), BashParams.args is list[str]
+    if isinstance(params.args, str):
+        import shlex
+        params.args = shlex.split(params.args) if params.args else []
 
     # Resolve command - check builtin map first, then try Windows alias
     bash_tool: CallableTool2 | None = BASH_COMMANDS.get(cmd)

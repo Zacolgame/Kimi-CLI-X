@@ -42,8 +42,8 @@ class RunParams(BaseModel):
     executable: str = Field(
         description="Executable path or application name, no need for a full path."
     )
-    args: list[str] = Field(
-        default_factory=list,
+    args: str = Field(
+        default="",
         description="Command arguments."
     )
     timeout: int = Field(
@@ -85,8 +85,10 @@ class Run(CallableTool2[RunParams]):
     async def __call__(self, params: RunParams) -> ToolReturnValue:
         import os
         script_path: str | None = None
+        # Convert args from str to list via shlex.split
+        args_list: list[str] = shlex.split(params.args) if params.args else []
         try:
-            # params.executable may contain arguments, split it respecting quotes, then insert to the start of params.args
+            # params.executable may contain arguments, split it respecting quotes, then insert to the start of args_list
             # Try progressively longer prefixes to find an existing file, so paths with spaces are handled.
             if " " in params.executable:
                 try:
@@ -105,22 +107,22 @@ class Run(CallableTool2[RunParams]):
                         params.executable = candidate
                         remaining = parts[i + 1 :]
                         if remaining:
-                            params.args = remaining + params.args
+                            args_list = remaining + args_list
                         break
                 else:
                     params.executable = parts[0]
                     remaining = parts[1:]
                     if remaining:
-                        params.args = remaining + params.args
+                        args_list = remaining + args_list
 
-            display_args = [arg[:100] + '...' if len(arg) > 100 else arg for arg in params.args]
+            display_args = [arg[:100] + '...' if len(arg) > 100 else arg for arg in args_list]
             cmd_str = shlex.join([params.executable] + display_args)
             display_cmd = params.executable if len(cmd_str) > _HUGE_CMD_THRESHOLD else cmd_str
 
             # Check forbidden commands (default + user-configured)
             forbidden_commands = _DEFAULT_FORBIDDEN_COMMANDS + self._session.custom_config.get("config_json", {}).get("forbidden_commands", [])
             if forbidden_commands:
-                full_cmd = " ".join([params.executable] + params.args)
+                full_cmd = " ".join([params.executable] + args_list)
                 normalized_cmd = " ".join(full_cmd.split())
                 cmd_tokens = normalized_cmd.split()
                 for forbidden in forbidden_commands:
@@ -183,13 +185,13 @@ class Run(CallableTool2[RunParams]):
 
             # Handle extremely long python -c scripts via temp file (Windows CreateProcessW ~32767 limit)
             if is_py:
-                c_idx = next((i for i, a in enumerate(params.args) if a == '-c'), None)
-                if c_idx is not None and c_idx + 1 < len(params.args) and len(params.args[c_idx + 1]) > 30000:
+                c_idx = next((i for i, a in enumerate(args_list) if a == '-c'), None)
+                if c_idx is not None and c_idx + 1 < len(args_list) and len(args_list[c_idx + 1]) > 30000:
                     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
-                        f.write(params.args[c_idx + 1])
+                        f.write(args_list[c_idx + 1])
                         script_path = f.name
                     # Replace -c <code> with <script_path>, preserving leading options and trailing args
-                    params.args = params.args[:c_idx] + [script_path] + params.args[c_idx + 2:]
+                    args_list = args_list[:c_idx] + [script_path] + args_list[c_idx + 2:]
 
             async with self._semaphore:
                 env_dict: dict[str, str] | None = None
@@ -201,7 +203,7 @@ class Run(CallableTool2[RunParams]):
                             env_dict[key] = value
                         else:
                             env_dict[item] = '1'
-                task = ProcessTask(params.executable, params.args, params.cwd, env_dict)
+                task = ProcessTask(params.executable, args_list, params.cwd, env_dict)
                 task_id = await task.start(self._session, "run", Path(params.executable).stem)
 
                 if params.run_in_background:

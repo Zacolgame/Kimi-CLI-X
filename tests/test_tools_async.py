@@ -125,21 +125,21 @@ class TestTaskOutput:
 class TestRun:
     async def test_foreground_success(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
-        params = RunParams(executable=sys.executable, args=["-c", "print('hello_run')"], timeout=10)
+        params = RunParams(executable=sys.executable, args="-c \"print('hello_run')\"", timeout=10)
         result = await tool(params)
         assert "hello_run" in str(result.output)
 
     async def test_foreground_failure(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
-        params = RunParams(executable=sys.executable, args=["-c", "import sys; sys.exit(1)"], timeout=10)
+        params = RunParams(executable=sys.executable, args='-c "import sys; sys.exit(1)"', timeout=10)
         result = await tool(params)
         assert "failed" in str(result.message).lower() or "exited" in str(result.output).lower()
 
     async def test_foreground_timeout(self, mock_session: MagicMock) -> None:
         tool = Run(session=mock_session)
         params = RunParams(
-            path=sys.executable,
-            args=["-c", "import time; time.sleep(100)"],
+            executable=sys.executable,
+            args='-c "import time; time.sleep(100)"',
             timeout=3,
         )
         result = await tool(params)
@@ -150,12 +150,21 @@ class TestRun:
         for tid in list(get_all_tasks(mock_session).keys()):
             remove_task_id(mock_session, tid)
 
+    async def test_python_c_code(self, mock_session: MagicMock) -> None:
+        """Test running Python code via the `python -c` pattern with the Run tool."""
+        tool = Run(session=mock_session)
+        code = "import sys; print('py_c_hello', sys.version_info[0])"
+        params = RunParams(executable=sys.executable, args=f'-c "{code}"', timeout=10)
+        result = await tool(params)
+        assert "py_c_hello" in str(result.output)
+        assert "failed" not in str(result.message).lower()
+
     async def test_output_path(self, mock_session: MagicMock, tmp_path: Path) -> None:
         tool = Run(session=mock_session)
         out_path = tmp_path / "run_out.txt"
         params = RunParams(
-            path=sys.executable,
-            args=["-c", "print('to_file')"],
+            executable=sys.executable,
+            args='-c "print(\'to_file\')"',
             timeout=10,
             output_path=str(out_path),
         )
