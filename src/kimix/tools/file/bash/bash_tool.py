@@ -132,6 +132,96 @@ def find_bash() -> str | None:
     return None
 
 
+# Characters for which a backslash escape must be preserved in bash.
+# These are shell metacharacters and other special characters where
+# converting \X to /X would change shell syntax or semantics.
+_BASH_METACHARACTERS = set("()|;&<>$\"`'*?[]{}~!#=% \t\n\r")
+
+
+def _prepare_bash_cmd(cmd: str) -> str:
+    r"""Prepare a command string for safe use with bash -c.
+
+    On Windows, bash consumes backslashes as escape sequences outside of
+    quotes, mangling Windows paths like ``src\kimix\tools\...`` into
+    ``srckimixtools...``.  This function converts unquoted backslashes to
+    forward slashes so that paths work correctly while preserving backslash
+    escapes inside quoted strings (single quotes, double quotes, and ``$'…'``)
+    and before bash metacharacters (e.g. ``\(``, ``\)``, ``\|``).
+
+    On non-Windows platforms, returns the command unchanged to preserve
+    existing behavior.
+    """
+    if sys.platform != "win32":
+        return cmd
+
+    result: list[str] = []
+    i = 0
+    length = len(cmd)
+
+    while i < length:
+        char = cmd[i]
+
+        if char == "'":
+            # Single-quoted region — copy literally until closing '
+            end = cmd.find("'", i + 1)
+            if end == -1:
+                result.append(cmd[i:])
+                break
+            result.append(cmd[i : end + 1])
+            i = end + 1
+
+        elif char == '"':
+            # Double-quoted region — copy literally until closing "
+            j = i + 1
+            while j < length:
+                if cmd[j] == "\\" and j + 1 < length and cmd[j + 1] == '"':
+                    # Escaped quote inside double quotes
+                    j += 2
+                elif cmd[j] == '"':
+                    break
+                else:
+                    j += 1
+            if j < length:
+                result.append(cmd[i : j + 1])
+                i = j + 1
+            else:
+                result.append(cmd[i:])
+                break
+
+        elif char == "$" and i + 1 < length and cmd[i + 1] == "'":
+            # $'...' ANSI-C quoted region
+            j = i + 2
+            while j < length:
+                if cmd[j] == "\\" and j + 1 < length:
+                    j += 2  # skip escaped char
+                elif cmd[j] == "'":
+                    break
+                else:
+                    j += 1
+            if j < length:
+                result.append(cmd[i : j + 1])
+                i = j + 1
+            else:
+                result.append(cmd[i:])
+                break
+
+        elif char == "\\":
+            if i + 1 < length and cmd[i + 1] in _BASH_METACHARACTERS:
+                # Backslash is escaping a bash metacharacter — preserve it
+                result.append("\\")
+                i += 1
+            else:
+                # Unquoted backslash in a path-like context — convert to /
+                result.append("/")
+                i += 1
+
+        else:
+            result.append(char)
+            i += 1
+
+    return "".join(result)
+
+
 class BashParams(BaseModel):
     """Parameters for the Bash tool — execute a bash command via the system bash."""
 
@@ -186,7 +276,9 @@ class Bash(CallableTool2[BashParams]):
 
 
         # Build the command line to pass to bash -c
-        process_task = ProcessTask(self._bash, ["-c", params.cmd], params.cwd, None)
+        # On Windows, escape backslashes so bash preserves them in paths.
+        safe_cmd = _prepare_bash_cmd(params.cmd)
+        process_task = ProcessTask(self._bash, ["-c", safe_cmd], params.cwd, None)
         task_id = await process_task.start(self._session, "bash")
 
         await process_task.wait(params.timeout)

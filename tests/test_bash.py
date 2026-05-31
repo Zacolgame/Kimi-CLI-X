@@ -16,7 +16,7 @@ from kimix.tools.file.bash import (
     Bash,
     BashParams,
 )
-from kimix.tools.file.bash.bash_tool import find_bash
+from kimix.tools.file.bash.bash_tool import find_bash, _prepare_bash_cmd
 from kimix.tools.background.utils import _pop_task_data
 
 
@@ -79,6 +79,235 @@ class TestBashParams:
     def test_timeout_max(self) -> None:
         with pytest.raises(Exception):
             BashParams(cmd="ls", timeout=200)
+
+
+# ============================================================================
+# _quote_for_bash_c
+# ============================================================================
+
+class TestPrepareBashCmd:
+    def test_noop_on_non_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "linux"):
+            assert _prepare_bash_cmd("echo hello") == "echo hello"
+
+    def test_noop_on_darwin(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "darwin"):
+            assert _prepare_bash_cmd("echo hello") == "echo hello"
+
+    def test_noop_on_windows_without_backslash(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            assert _prepare_bash_cmd("echo hello") == "echo hello"
+
+    def test_converts_unquoted_backslashes_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"cat src\kimix\tools\file\bash\bash_tool.py"
+            result = _prepare_bash_cmd(cmd)
+            assert result == "cat src/kimix/tools/file/bash/bash_tool.py"
+
+    def test_preserves_single_quotes_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = "echo 'hello world'"
+            result = _prepare_bash_cmd(cmd)
+            assert result == "echo 'hello world'"
+
+    def test_preserves_backslashes_inside_single_quotes_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"echo 'hello\world'"
+            result = _prepare_bash_cmd(cmd)
+            assert result == r"echo 'hello\world'"
+
+    def test_preserves_backslashes_inside_double_quotes_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "hello\world"'
+            result = _prepare_bash_cmd(cmd)
+            assert result == r'echo "hello\world"'
+
+    def test_preserves_backslashes_inside_ansi_c_quotes_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"echo $'hello\nworld'"
+            result = _prepare_bash_cmd(cmd)
+            assert result == r"echo $'hello\nworld'"
+
+    def test_empty_command_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            assert _prepare_bash_cmd("") == ""
+
+    def test_pipes_and_redirects_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = "echo hello | grep h > out.txt"
+            result = _prepare_bash_cmd(cmd)
+            assert result == "echo hello | grep h > out.txt"
+
+    def test_drive_letter_path_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"cat C:\Users\test\file.txt"
+            result = _prepare_bash_cmd(cmd)
+            assert result == "cat C:/Users/test/file.txt"
+
+    def test_relative_paths_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            assert _prepare_bash_cmd(r"cd .\subdir") == "cd ./subdir"
+            assert _prepare_bash_cmd(r"cd ..\parent") == "cd ../parent"
+
+    def test_multiple_paths_in_one_command_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"diff a\b\c.py x\y\z.py"
+            assert _prepare_bash_cmd(cmd) == "diff a/b/c.py x/y/z.py"
+
+    def test_mixed_quoted_and_unquoted_backslashes_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"cat 'src\a.py' src\b.py"
+            assert _prepare_bash_cmd(cmd) == r"cat 'src\a.py' src/b.py"
+
+    def test_escaped_quote_inside_double_quotes_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "hello \"world\""'
+            assert _prepare_bash_cmd(cmd) == r'echo "hello \"world\""'
+
+    def test_unclosed_single_quote_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"echo 'hello src\file.py"
+            assert _prepare_bash_cmd(cmd) == r"echo 'hello src\file.py"
+
+    def test_unclosed_double_quote_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'echo "hello src\file.py'
+            assert _prepare_bash_cmd(cmd) == r'echo "hello src\file.py'
+
+    def test_dollar_quote_with_escaped_single_quote_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"echo $'it\'s working'"
+            assert _prepare_bash_cmd(cmd) == r"echo $'it\'s working'"
+
+    def test_backslash_before_special_chars_preserved_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            # Backslash escapes before bash metacharacters are preserved
+            assert _prepare_bash_cmd(r"echo a\|b") == r"echo a\|b"
+            assert _prepare_bash_cmd(r"echo a\;b") == r"echo a\;b"
+            assert _prepare_bash_cmd(r"echo a\&b") == r"echo a\&b"
+            assert _prepare_bash_cmd(r"echo a\>b") == r"echo a\>b"
+            assert _prepare_bash_cmd(r"echo a\<b") == r"echo a\<b"
+
+    def test_double_backslash_outside_quotes_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            # Each backslash is converted individually (\\ -> //)
+            assert _prepare_bash_cmd(r"echo \\path") == "echo //path"
+
+    def test_backslash_at_end_of_string_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            assert _prepare_bash_cmd("echo trailing\\") == "echo trailing/"
+
+    def test_pipes_and_redirects_with_paths_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"cat src\a.py | grep x > out\b.txt"
+            assert _prepare_bash_cmd(cmd) == "cat src/a.py | grep x > out/b.txt"
+
+    def test_preserves_quoted_path_with_spaces_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'cat "C:\Program Files\app\file.txt"'
+            assert _prepare_bash_cmd(cmd) == r'cat "C:\Program Files\app\file.txt"'
+
+    def test_preserves_single_quoted_path_with_spaces_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"cat 'C:\Program Files\app\file.txt'"
+            assert _prepare_bash_cmd(cmd) == r"cat 'C:\Program Files\app\file.txt'"
+
+    def test_command_substitution_with_backslashes_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            # $(...) is not a quoted region; backslashes inside are converted
+            cmd = r"echo $(cat src\file.py)"
+            assert _prepare_bash_cmd(cmd) == "echo $(cat src/file.py)"
+
+    def test_backtick_with_backslashes_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            # Backticks are not a quoted region; backslashes inside are converted
+            cmd = r"echo `cat src\file.py`"
+            assert _prepare_bash_cmd(cmd) == "echo `cat src/file.py`"
+
+    def test_find_command_with_escaped_parens_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r'find build -maxdepth 4 \( -name "luisa-xir*" -o -name "luisa-spirv*" \) | head -n 20'
+            expected = r'find build -maxdepth 4 \( -name "luisa-xir*" -o -name "luisa-spirv*" \) | head -n 20'
+            assert _prepare_bash_cmd(cmd) == expected
+
+    def test_backslash_space_preserved_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            # Backslash-escaped space must be preserved so the word remains single token
+            assert _prepare_bash_cmd(r"echo hello\ world") == r"echo hello\ world"
+
+    def test_backslash_dollar_preserved_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            assert _prepare_bash_cmd(r"echo \$HOME") == r"echo \$HOME"
+
+    def test_backslash_star_preserved_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            assert _prepare_bash_cmd(r"echo \*") == r"echo \*"
+
+    def test_backslash_backtick_preserved_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            assert _prepare_bash_cmd(r"echo \`cmd\`") == r"echo \`cmd\`"
+
+    def test_backslash_brace_preserved_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            assert _prepare_bash_cmd(r"echo \{a,b\}") == r"echo \{a,b\}"
+
+    def test_backslash_tilde_preserved_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            assert _prepare_bash_cmd(r"echo \~user") == r"echo \~user"
+
+    def test_mixed_paths_and_escapes_on_windows(self) -> None:
+        with patch("kimix.tools.file.bash.bash_tool.sys.platform", "win32"):
+            cmd = r"cat src\tools\file.py && find build \( -name '*.py' \)"
+            expected = r"cat src/tools/file.py && find build \( -name '*.py' \)"
+            assert _prepare_bash_cmd(cmd) == expected
+
+
+# ============================================================================
+# Bash.__call__ — integration tests with backslash paths on Windows
+# ============================================================================
+
+class TestBashBackslashPaths:
+    async def test_cat_with_backslash_path(self, mock_session: MagicMock) -> None:
+        bash = Bash(session=mock_session)
+        params = BashParams(cmd=r"cat src\kimix\tools\file\bash\bash_tool.py")
+        result = await bash(params)
+        assert isinstance(result, ToolOk)
+        assert "find_bash" in result.output
+
+    async def test_ls_with_backslash_path(self, mock_session: MagicMock) -> None:
+        bash = Bash(session=mock_session)
+        params = BashParams(cmd=r"ls src\kimix\tools\file\bash")
+        result = await bash(params)
+        assert isinstance(result, ToolOk)
+        assert "bash_tool.py" in result.output
+
+    async def test_cd_with_backslash_path(self, mock_session: MagicMock) -> None:
+        bash = Bash(session=mock_session)
+        params = BashParams(cmd=r"cd src\kimix\tools\file\bash && pwd")
+        result = await bash(params)
+        assert isinstance(result, ToolOk)
+        assert "bash" in result.output
+
+    async def test_multiple_backslash_paths(self, mock_session: MagicMock) -> None:
+        bash = Bash(session=mock_session)
+        params = BashParams(cmd=r"echo src\kimix\tools > nul && cat src\kimix\tools\file\bash\bash_tool.py")
+        result = await bash(params)
+        assert isinstance(result, ToolOk)
+        assert "find_bash" in result.output
+
+    async def test_quoted_backslash_path_preserved(self, mock_session: MagicMock) -> None:
+        bash = Bash(session=mock_session)
+        params = BashParams(cmd=r"cat 'src\kimix\tools\file\bash\bash_tool.py'")
+        result = await bash(params)
+        assert isinstance(result, ToolOk)
+        assert "find_bash" in result.output
+
+    async def test_double_quoted_backslash_path_preserved(self, mock_session: MagicMock) -> None:
+        bash = Bash(session=mock_session)
+        params = BashParams(cmd=r'cat "src\kimix\tools\file\bash\bash_tool.py"')
+        result = await bash(params)
+        assert isinstance(result, ToolOk)
+        assert "find_bash" in result.output
 
 
 # ============================================================================
@@ -681,3 +910,41 @@ class TestComplexCommands:
         assert isinstance(result, ToolOk)
         assert "done" in result.output
         assert "trapped" in result.output
+
+    # -- backslash escapes before metacharacters -----------------------------
+
+    async def test_find_with_escaped_parens(self, mock_session: MagicMock, tmp_path: Path) -> None:
+        bash = Bash(session=mock_session)
+        # Create files to search
+        (tmp_path / "foo.txt").write_text("foo")
+        (tmp_path / "bar.py").write_text("bar")
+        (tmp_path / "baz.txt").write_text("baz")
+        posix = str(tmp_path).replace("\\", "/")
+        # The \(\) grouping must survive _prepare_bash_cmd on Windows
+        params = BashParams(cmd=f"find {posix} -maxdepth 1 \\( -name '*.txt' -o -name '*.py' \\) | sort")
+        result = await bash(params)
+        assert isinstance(result, ToolOk)
+        assert "foo.txt" in result.output
+        assert "bar.py" in result.output
+        assert "baz.txt" in result.output
+
+    async def test_echo_escaped_pipe(self, mock_session: MagicMock) -> None:
+        bash = Bash(session=mock_session)
+        params = BashParams(cmd="echo 'a|b' | cat")
+        result = await bash(params)
+        assert isinstance(result, ToolOk)
+        assert "a|b" in result.output
+
+    async def test_echo_escaped_glob(self, mock_session: MagicMock) -> None:
+        bash = Bash(session=mock_session)
+        params = BashParams(cmd="echo '*'")
+        result = await bash(params)
+        assert isinstance(result, ToolOk)
+        assert "*" in result.output
+
+    async def test_echo_escaped_semicolon(self, mock_session: MagicMock) -> None:
+        bash = Bash(session=mock_session)
+        params = BashParams(cmd="echo 'a;b'")
+        result = await bash(params)
+        assert isinstance(result, ToolOk)
+        assert "a;b" in result.output
