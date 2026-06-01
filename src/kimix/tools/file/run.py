@@ -11,8 +11,10 @@ from pydantic import BaseModel, Field
 from kimi_cli.session import Session
 from kimix.tools.common import _maybe_export_output_async, _export_to_temp_file_async, ProcessTask
 from kimi_cli.tools.display import ShellDisplayBlock
-from kimix.tools.file.bash.bash_tool import find_bash
-
+from kimi_cli.share import get_share_dir
+import functools
+import shlex
+import shutil
 _HUGE_CMD_THRESHOLD = 10000
 """Character count above which command display is culled to only the path."""
 
@@ -35,6 +37,149 @@ _DEFAULT_FORBIDDEN_COMMANDS = [
     "regedit",
     "regedt32",
 ]
+
+@functools.lru_cache(maxsize=1)
+def find_bash() -> str | None:
+    """Find the system bash executable.
+
+    On Windows, prioritizes Git for Windows (msys) bash over WSL bash,
+    because msys bash handles Windows paths more predictably.
+    """
+    if sys.platform == "win32":
+        # Strategy 1: read cached git address from share directory
+        git_cache = get_share_dir() / "git"
+        if git_cache.is_dir():
+            # Git was installed directly into the share directory
+            for subpath in ("bin/bash.exe", "usr/bin/bash.exe"):
+                bash_candidate = git_cache / subpath
+                if bash_candidate.exists():
+                    return str(bash_candidate.resolve())
+        elif git_cache.is_file():
+            # Read cached git.exe path from file
+            git_exe_path = git_cache.read_text().strip()
+            if git_exe_path:
+                git_exe = Path(git_exe_path).resolve()
+                if git_exe.parent.name.lower() == "cmd":
+                    git_root = git_exe.parent.parent
+                else:
+                    git_root = git_exe.parent
+                for subpath in ("bin/bash.exe", "usr/bin/bash.exe"):
+                    bash_candidate = git_root / subpath
+                    if bash_candidate.exists():
+                        return str(bash_candidate.resolve())
+        # Strategy 2: Find git location and derive the Git installation root.
+        # git.exe typically resides in <GitRoot>/cmd/git.exe,
+        # and bash.exe is in <GitRoot>/bin/bash.exe.
+        git_path = shutil.which("git")
+        if git_path:
+            git_exe = Path(git_path).resolve()
+            if git_exe.parent.name.lower() == "cmd":
+                git_root = git_exe.parent.parent
+            else:
+                git_root = git_exe.parent
+            for subpath in ("bin/bash.exe", "usr/bin/bash.exe"):
+                bash_candidate = git_root / subpath
+                if bash_candidate.exists():
+                    return str(bash_candidate.resolve())
+        # Strategy 3: Registry lookup for Git install location
+        try:
+            import winreg
+            reg_paths = [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Git_is1"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Git_is1"),
+            ]
+            for hkey, subkey in reg_paths:
+                try:
+                    with winreg.OpenKey(hkey, subkey) as key:
+                        install_path, _ = winreg.QueryValueEx(key, "InstallLocation")
+                        for subpath in ("bin/bash.exe", "usr/bin/bash.exe"):
+                            bash_candidate = Path(install_path) / subpath
+                            if bash_candidate.exists():
+                                return str(bash_candidate.resolve())
+                except FileNotFoundError:
+                    pass
+        except Exception:
+            pass
+        # Strategy 4: bash.exe via PATH (Git/bin often in PATH)
+        bash_path = shutil.which("bash.exe")
+        if bash_path:
+            return str(Path(bash_path).resolve())
+
+        # Strategy 5: where command
+        try:
+            import subprocess
+            r = subprocess.run(
+                ["where.exe", "bash.exe"],
+                capture_output=True, text=True, check=True
+            )
+            return r.stdout.strip().splitlines()[0]
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+
+        # Strategy 6: Common paths fallback
+        candidates = [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+            r"C:\Git\bin\bash.exe",
+        ]
+        for candidate in candidates:
+            if Path(candidate).exists():
+                return str(Path(candidate).resolve())
+        local_git = Path.home() / "AppData" / "Local" / "Programs" / "Git" / "bin" / "bash.exe"
+        if local_git.exists():
+            return str(local_git.resolve())
+        scoop_git = Path.home() / "scoop" / "apps" / "git" / "current" / "bin" / "bash.exe"
+        if scoop_git.exists():
+            return str(scoop_git.resolve())
+        # Strategy 7: Download and install PortableGit to the share directory
+        try:
+            from kimix.tools.file.bash.install_git import install_git
+            install_dir = str(get_share_dir() / "git")
+            if install_git(install_dir=install_dir):
+                # Retry strategy 1 after successful install
+                for subpath in ("bin/bash.exe", "usr/bin/bash.exe"):
+                    bash_candidate = Path(install_dir) / subpath
+                    if bash_candidate.exists():
+                        return str(bash_candidate.resolve())
+        except Exception:
+            pass
+
+    if sys.platform == "darwin":
+        # Strategy 1: Homebrew bash (Apple Silicon) – often newer than system bash
+        candidate = Path("/opt/homebrew/bin/bash")
+        if candidate.exists():
+            return str(candidate.resolve())
+        # Strategy 2: Homebrew bash (Intel Macs)
+        candidate = Path("/usr/local/bin/bash")
+        if candidate.exists():
+            return str(candidate.resolve())
+        # Strategy 3: MacPorts
+        candidate = Path("/opt/local/bin/bash")
+        if candidate.exists():
+            return str(candidate.resolve())
+        # Strategy 4: Git bash fallback (official Git installer for macOS)
+        git_path = shutil.which("git")
+        if git_path:
+            git_exe = Path(git_path).resolve()
+            if git_exe.parent.name.lower() == "bin":
+                git_root = git_exe.parent
+            else:
+                git_root = git_exe.parent
+            for subpath in ("bin/bash", "usr/bin/bash"):
+                bash_candidate = git_root / subpath
+                if bash_candidate.exists():
+                    return str(bash_candidate.resolve())
+        # Strategy 5: System bash (older, but guaranteed to exist)
+        candidate = Path("/bin/bash")
+        if candidate.exists():
+            return str(candidate.resolve())
+
+    bash = shutil.which("bash")
+    if bash:
+        return bash
+    return None
+
+
 class RunParams(BaseModel):
     command: str = Field(
         description=(
