@@ -32,7 +32,7 @@ _NIBBLE_LOOKUP: list[str] = [NIBBLE_STR[i >> 4] + NIBBLE_STR[i & 0x0F] for i in 
 
 
 def compute_line_hash(line_num: int, line: str, prev_hash: str | None) -> str:
-    """Compute a short 2-char hash of a line using xxHash32 with cumulative chaining."""
+    """Compute a 2-char xxHash32 line hash with cumulative chaining."""
     # Strip trailing carriage return
     if line.endswith("\r"):
         line = line[:-1]
@@ -67,7 +67,7 @@ def compute_line_hash(line_num: int, line: str, prev_hash: str | None) -> str:
 
 
 def parse_anchor(anchor: str) -> tuple[int, str] | None:
-    """Parse 'LINE#HASH' into (line_num, hash). Accepts legacy 'LINE:HASH' format."""
+    """Parse 'LINE#HASH' into (line_num, hash). Supports legacy 'LINE:HASH'."""
     parts = anchor.split("#", 1)
     if len(parts) == 2:
         try:
@@ -641,17 +641,17 @@ def generate_hash_aware_diff(
 
 class HashReadParams(BaseModel):
     path: str = Field(description="File path. Absolute for files outside working directory.")
-    offset: int = Field(default=0, description="Line offset for read (0-based).")
+    offset: int = Field(default=0, description="0-based line offset.")
     limit: int = Field(default=2000, description="Max lines to read.")
     max_char: int = Field(
         default=65536,
         ge=0,
-        description="Maximum number of characters to return.",
+        description="Max characters to return.",
     )
     char_offset: int = Field(
         default=0,
         ge=0,
-        description="Character offset to start returning from.",
+        description="Character offset to start from.",
     )
 
 
@@ -833,7 +833,7 @@ class HashRead(CallableTool2[HashReadParams]):
 
 
 class HashEditParams(BaseModel):
-    path: str = Field(description="File path. Absolute paths required outside the working directory.")
+    path: str = Field(description="File path. Absolute for files outside working directory.")
     edits: list[HashlineEdit] = Field(description="Edits to apply.")
 
 class HashEdit(CallableTool2[HashEditParams]):
