@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from asyncio import Future
 import difflib
 from functools import lru_cache
+import orjson
 import typing
 from typing import Any, ClassVar, Protocol, Self, cast, override, runtime_checkable
 
@@ -713,6 +714,97 @@ def _repair_dict_for_model(
     return mapped
 
 
+def _clean_error_loc(loc: tuple[str | int, ...]) -> str:
+    """Remove union-discriminator noise from a Pydantic error location.
+
+    Pydantic v2 includes union-branch names (e.g. ``Edit``, ``list[Edit]``)
+    in ``loc`` tuples.  This makes the path hard for an LLM to read and
+    often points to a branch that was *not* intended.  We keep only the
+    real field / index segments.
+    """
+    cleaned: list[str] = []
+    for part in loc:
+        s = str(part)
+        # Union branch names are capitalised model names or type expressions
+        # like ``list[Edit]``.  They may also start with an underscore in
+        # private helper classes (e.g. ``_Edit``).  Real field names in this
+        # codebase are snake_case; integers are list indices.
+        stripped = s.lstrip("_")
+        if (stripped and stripped[:1].isupper()) or "[" in s:
+            continue
+        cleaned.append(s)
+    return ".".join(cleaned) if cleaned else ".".join(str(p) for p in loc)
+
+
+def _format_pydantic_validation_error(
+    error: pydantic.ValidationError,
+    tool_name: str,
+    params_schema: dict[str, Any] | None = None,
+) -> str:
+    """Format a pydantic ``ValidationError`` into a concise, LLM-friendly message."""
+    lines: list[str] = []
+    lines.append(
+        f"Invalid arguments for tool `{tool_name}` — "
+        f"{len(error.errors())} validation error(s):"
+    )
+    lines.append("")
+
+    for i, err in enumerate(error.errors(), 1):
+        loc = _clean_error_loc(err["loc"])
+        msg = err["msg"]
+        err_type = err.get("type", "")
+
+        lines.append(f"{i}. `{loc}` — {msg}")
+
+        inp = err.get("input")
+        if inp is not None:
+            inp_str = orjson.dumps(inp).decode()
+            if len(inp_str) > 300:
+                inp_str = inp_str[:300] + " ..."
+            lines.append(f"  Received: {inp_str}")
+
+        # Actionable hints for common error types
+        match err_type:
+            case "missing":
+                lines.append("  Hint: this field is required but was not provided.")
+            case "list_type":
+                lines.append("  Hint: this field should be an array (list).")
+            case "dict_type":
+                lines.append("  Hint: this field should be an object (dict).")
+            case "string_type":
+                lines.append("  Hint: this field should be a string.")
+            case "int_type":
+                lines.append("  Hint: this field should be an integer.")
+            case "bool_type":
+                lines.append("  Hint: this field should be a boolean.")
+            case "float_type":
+                lines.append("  Hint: this field should be a number.")
+            case "literal_error":
+                lines.append("  Hint: the value must be one of the allowed options.")
+            case "extra_forbidden":
+                lines.append(
+                    "  Hint: this field is not recognized — remove it or check the schema."
+                )
+            case "url_parsing":
+                lines.append("  Hint: the value must be a valid URL.")
+            case "too_short":
+                lines.append("  Hint: the value is too short.")
+            case "too_long":
+                lines.append("  Hint: the value is too long.")
+            case _ if err_type.startswith("greater_than"):
+                lines.append("  Hint: the value is too small.")
+            case _ if err_type.startswith("less_than"):
+                lines.append("  Hint: the value is too large.")
+
+    if params_schema is not None:
+        lines.append("")
+        lines.append("Expected JSON schema:")
+        schema_str = orjson.dumps(params_schema, option=orjson.OPT_INDENT_2).decode()
+        lines.append(schema_str)
+
+    return "\n".join(lines)
+
+
 class _GenerateJsonSchemaNoTitles(GenerateJsonSchema):
     """Custom JSON schema generator that omits titles."""
 
@@ -804,7 +896,9 @@ class CallableTool2[Params: BaseModel](ABC):
                         pass  # fall through to return the original error
                     else:
                         return await self.__call__(params)
-            return ToolValidateError(str(e))
+            return ToolValidateError(
+                _format_pydantic_validation_error(e, self.name, self.base.parameters)
+            )
 
         ret = await self.__call__(params)
         if not isinstance(ret, ToolReturnValue):  # type: ignore[reportUnnecessaryIsInstance]

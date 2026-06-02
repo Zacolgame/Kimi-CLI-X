@@ -22,6 +22,8 @@ from typing import ClassVar, override
 import pytest
 from pydantic import BaseModel, Field
 
+import pydantic
+
 from kosong.tooling import (
     CallableTool2,
     FIELD_ALIASES_ACTIVE,
@@ -39,6 +41,8 @@ from kosong.tooling import (
     ToolOk,
     ToolReturnValue,
     _COMMON_FIELD_ALIASES,
+    _clean_error_loc,
+    _format_pydantic_validation_error,
     _repair_dict_for_model,
 )
 from kosong.tooling.error import ToolValidateError
@@ -495,6 +499,7 @@ def test_real_params_can_be_repaired_with_common_aliases(params_cls: type[BaseMo
 
 def test_grep_tool_uses_custom_aliases() -> None:
     """Grep sets ``field_aliases`` to GENERAL | FILE | WEB."""
+    pytest.importorskip("kimi_cli")
     from kimi_cli.tools.file.grep_local import Grep, Params as GrepParams
 
     class FakeRuntime:
@@ -574,3 +579,103 @@ def test_repair_list_of_models_with_custom_aliases() -> None:
     data = {"items": [{"link": "a"}, {"href": "b"}]}
     repaired = _repair_dict_for_model(data, Outer, FIELD_ALIASES_WEB)
     assert repaired == {"items": [{"url": "a"}, {"url": "b"}]}
+
+
+# ---------------------------------------------------------------------------
+# 7. Validation error formatter tests
+# ---------------------------------------------------------------------------
+
+
+def test_clean_error_loc_removes_union_branches() -> None:
+    assert _clean_error_loc(("edit", "Edit", "old")) == "edit.old"
+    assert _clean_error_loc(("edit", "list[Edit]")) == "edit"
+    assert _clean_error_loc(("items", 0, "Edit", "old")) == "items.0.old"
+    assert _clean_error_loc(("path",)) == "path"
+    assert _clean_error_loc(("user", "address", "street")) == "user.address.street"
+    # Falls back to raw loc when every segment is a union branch.
+    assert _clean_error_loc(("Edit",)) == "Edit"
+
+
+def test_format_validation_error_basic() -> None:
+    class _Edit(BaseModel):
+        old: str
+        new: str
+
+    class _Params(BaseModel):
+        path: str
+        edit: _Edit | list[_Edit]
+
+    try:
+        _Params.model_validate({"path": "/tmp/a", "edit": {"new": "x"}})
+    except pydantic.ValidationError as e:
+        msg = _format_pydantic_validation_error(e, "EditFile")
+        assert "Invalid arguments for tool `EditFile`" in msg
+        assert "2 validation error(s):" in msg
+        assert "`edit.old` — Field required" in msg
+        assert "`edit` — Input should be a valid list" in msg
+        assert "Hint: this field is required" in msg
+        assert "Hint: this field should be an array (list)." in msg
+        assert "Received:" in msg
+
+
+def test_format_validation_error_includes_schema() -> None:
+    class _Inner(BaseModel):
+        value: str
+
+    class _Params(BaseModel):
+        name: str
+        inner: _Inner
+
+    schema: dict[str, object] = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "inner": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+            },
+        },
+    }
+
+    try:
+        _Params.model_validate({"inner": {}})
+    except pydantic.ValidationError as e:
+        msg = _format_pydantic_validation_error(e, "TestTool", schema)
+        assert "Expected JSON schema:" in msg
+        assert '"name"' in msg
+
+
+def test_format_validation_error_extra_forbidden() -> None:
+    class _Params(BaseModel):
+        model_config = {"extra": "forbid"}
+        command: str
+
+    try:
+        _Params.model_validate({"command": "ls", "extra": 1})
+    except pydantic.ValidationError as e:
+        msg = _format_pydantic_validation_error(e, "Shell")
+        assert "`extra` — Extra inputs are not permitted" in msg
+        assert "not recognized" in msg
+
+
+def test_callable_tool2_returns_formatted_validation_error() -> None:
+    class _Params(BaseModel):
+        command: str
+
+    class _BadTool(CallableTool2[_Params]):
+        name: str = "bad"
+        description: str = "test"
+        params: type[_Params] = _Params
+        field_aliases: ClassVar[dict[str, str]] = {}
+
+        @override
+        async def __call__(self, params: _Params) -> ToolReturnValue:
+            return ToolOk(output=params.command)
+
+    tool = _BadTool()
+    result = asyncio.run(tool.call({"cmd": "ls"}))
+    assert isinstance(result, ToolValidateError)
+    assert "Invalid arguments for tool `bad`" in result.message
+    assert "`command` — Field required" in result.message
+    assert "Expected JSON schema:" in result.message
+    assert "command" in result.message
