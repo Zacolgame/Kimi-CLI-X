@@ -547,8 +547,6 @@ def _handle_tool_call(
         formatted = _format_tool_args(name, args)
         if formatted:
             header = f"⚡ {name} {formatted}"
-        elif formatted is not None:
-            header = f"⚡ {name}"
         else:
             return
         _stream.colorful_print_word(
@@ -569,8 +567,6 @@ def _handle_tool_call(
                 header = None
                 if formatted:
                     header = f"⚡ {name} {formatted}"
-                elif formatted is not None:
-                    header = f"⚡ {name}"
                 if header:
                     _stream.colorful_print_word(header, fg=Color.BRIGHT_MAGENTA, require_new_line=True)
             if output_function:

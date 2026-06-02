@@ -9,6 +9,8 @@
       "kimix.tools.skill:Search",
       "kimix.tools.note:Note",
       "kimix.tools.agent:Agent",
+      "kimix.tools.agent:AgentList",
+      "kimix.tools.agent:AgentClose",
       "kimi_cli.tools.todo:SetTodoList",
       "kimi_cli.tools.step_mem:StepMemory"
     ]

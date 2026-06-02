@@ -59,21 +59,19 @@ def get_system_prompt(
             role_doc = f'You are a {role}'
             items.append(
                 'Persist: finish all requirements, keep trying until done.')
-            items.append(
-                'Interactive: short timeout, then `TaskOutput`/`Input`.')
             # if args.KIMI_OS == 'Windows':
             #     items.append('No shell, powershell or cmd: use `Run`/`Python` instead.')
             # else:
             #     items.append('No shell or bash: use `Run`/`Python` instead.')
             items.append('Multi-step: use `SetTodoList` and `StepMemory`. Finish all before ending.')
-            if yolo and not is_sub_agent:
-                items.append('Yolo: no asking. accept all.')
             if not is_sub_agent:
+                if yolo:
+                    items.append('Yolo: no asking. accept all.')
                 items.append('`Search` to search, retrieve skills, docs.')
                 items.append('Drop context aggressively, use `StepMemory` to manage memory.')
                 items.append('Use `ContextRetrieval` to recall past conversation turns that were compacted out of context.')
             else:
-                items.append('Sub-Agent: only report results.')
+                items.append('Sub-Agent: only report results. If any option, output the question and stop.')
         if extra_system_prompt and extra_system_prompt.role_callback:
             extra_system_prompt.role_callback(agent_role, items)
 
@@ -107,6 +105,7 @@ def get_system_prompt(
                 items.append('Search, analyze, report concisely.')
             case SystemPromptType.TrivialSubAgent:
                 worker_logic('terse sub-agent', True)
+                items.append('If you need clarification from the parent agent, call the `ask_parent` tool with your question, then stop.')
             case SystemPromptType.Supervisor:
                 use_agent_md = True
                 use_skills = True

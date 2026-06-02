@@ -178,12 +178,9 @@ def _cmd_fix(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
 
 
 def _cmd_plan(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
+    file_path: str | None = None
     if len(task_split) >= 2:
-        requirement = ':'.join(task_split[1:]).strip()
-        if requirement:
-            prompt_plan(requirement)
-            return None, False
-
+        file_path = ':'.join(task_split[1:]).strip()
     print(
         f'\n>>>> Start input requirement for plan, end with {colorful_text("/end", Color.YELLOW)}, '
         f'cancel with {colorful_text("/cancel", Color.YELLOW)}')
@@ -200,7 +197,7 @@ def _cmd_plan(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     if not requirement:
         print_warning('No requirement provided.')
         return None, False
-    prompt_plan(requirement)
+    prompt_plan(requirement, file_path or 'plan.md')
     return None, False
 
 

@@ -414,7 +414,7 @@ class Bash(CallableTool2[BashParams]):
                     return ToolError(
                         output="",
                         message=f"Command `{full_cmd}` is forbidden by config rule.",
-                        brief=full_cmd,
+                        brief="Forbidden command",
                     )
 
         # Build the command line to pass to bash -c
@@ -430,7 +430,7 @@ class Bash(CallableTool2[BashParams]):
             return ToolError(
                 output=output or f"Running in background. task_id: `{task_id}`. use `TaskOutput` or `Input`",
                 message="Process timeout",
-                brief=f"Timeout: {params.cmd}",
+                brief="Timeout",
             )
 
         remove_task_id(self._session, task_id)
@@ -447,7 +447,7 @@ class Bash(CallableTool2[BashParams]):
             output = f'saved to file `{display_path}`'
 
         if not success:
-            return ToolError(output=output, message="Command execution failed", brief=params.cmd)
+            return ToolError(output=output, message="Command execution failed", brief="Command execution failed")
 
         output = await _maybe_export_output_async(output)
         return ToolOk(

@@ -315,7 +315,7 @@ class Run(CallableTool2[RunParams]):
                         return ToolError(
                             output="",
                             message=f"Command `{full_cmd}` is forbidden by config rule.",
-                            brief=display_cmd,
+                            brief="Forbidden command",
                         )
 
             # Check if executable is a valid process (in PATH or existing file),
@@ -399,7 +399,7 @@ class Run(CallableTool2[RunParams]):
                     return ToolError(
                         output=output,
                         message=f"Running in background. task_id: `{task_id}`. use `TaskOutput` or `Input`",
-                        brief=f"Timeout: {display_cmd}",
+                        brief="Timeout",
                     )
                 # Clean up foreground task registration
                 from kimix.tools.background.utils import remove_task_id
@@ -426,7 +426,7 @@ class Run(CallableTool2[RunParams]):
                     return ToolError(
                         output=output,
                         message="Command execution failed",
-                        brief=display_cmd,
+                        brief="Command execution failed",
                     )
 
                 output = await _maybe_export_output_async(output)
