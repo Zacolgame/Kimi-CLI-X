@@ -139,7 +139,12 @@ def _make_soul(
         runtime=_runtime_with_llm(runtime, llm),
     )
     context = Context(file_backend=tmp_path / "history.jsonl")
-    return KimiSoul(agent, context=context), context
+    soul = KimiSoul(agent, context=context)
+    # Disable auto-retrieval so it doesn't inject extra system-reminders into snapshots
+    soul._loop_control.auto_retrieve_history = False
+    soul._loop_control.auto_retrieve_working_memory = False
+    soul._loop_control.auto_retrieve_recency_memory = False
+    return soul, context
 
 
 async def _run_and_collect_turns(

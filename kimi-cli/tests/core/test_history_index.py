@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -114,3 +115,46 @@ class TestHistoryIndex:
         results = idx.search("original text", top_k=1)
         assert len(results) >= 1
         assert results[0]["text"] == text
+
+    def test_search_with_recency_boosts_newer_docs(self):
+        idx = HistoryIndex()
+        # Index docs with a shared rare term plus unrelated docs so BM25 IDF
+        # for the shared term is non-zero (needs enough docs for IDF > 0).
+        idx.index_messages([_msg("user", "older document about alpha programming")])
+        idx._turns[0]["timestamp"] = time.time() - 7200  # 2 hours ago
+        idx.index_messages([_msg("assistant", "unrelated answer about java")])
+        idx.index_messages([_msg("user", "newer document about alpha programming")])
+        idx.index_messages([_msg("assistant", "another unrelated answer about golang")])
+
+        results = idx.search_with_recency("alpha programming", top_k=2, recency_weight=1.0)
+        # Filter to the two matching docs
+        matching = [r for r in results if "alpha" in r["text"]]
+        assert len(matching) == 2
+        # With the default 24-hour decay, the 2-hour-old doc gets ~1.92 boost, the new doc gets ~2.0 boost
+        # so the newer doc should rank first despite identical BM25 scores
+        assert matching[0]["turn_id"] == 2
+        assert matching[1]["turn_id"] == 0
+        assert matching[0]["boosted_score"] > matching[1]["boosted_score"]
+
+    def test_search_with_recency_weight_zero_falls_back_to_bm25(self):
+        idx = HistoryIndex()
+        idx.index_messages([_msg("user", "older document about alpha programming")])
+        idx._turns[0]["timestamp"] = time.time() - 7200
+        idx.index_messages([_msg("assistant", "unrelated answer about java")])
+        idx.index_messages([_msg("user", "newer document about alpha programming")])
+        idx.index_messages([_msg("assistant", "another unrelated answer about golang")])
+
+        results = idx.search_with_recency("alpha programming", top_k=2, recency_weight=0.0)
+        # With zero recency weight, ordering should match pure BM25
+        bm25_results = idx.search("alpha programming", top_k=2)
+        assert [r["turn_id"] for r in results] == [r["turn_id"] for r in bm25_results]
+
+    def test_search_with_recency_preserves_original_score(self):
+        idx = HistoryIndex()
+        idx.index_messages([_msg("user", "unique search term xyz")])
+        idx.index_messages([_msg("assistant", "something unrelated about java")])
+        results = idx.search_with_recency("unique search term xyz", top_k=1)
+        assert len(results) == 1
+        assert "score" in results[0]
+        assert "boosted_score" in results[0]
+        assert results[0]["boosted_score"] >= results[0]["score"]

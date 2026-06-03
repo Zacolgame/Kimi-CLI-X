@@ -94,6 +94,7 @@ def _make_compactable_soul() -> Any:
 
     soul._checkpoint = AsyncMock()
     soul._history_index = MagicMock()
+    soul._recently_retrieved_turn_ids = set()
 
     fake_result = MagicMock()
     fake_result.messages = []

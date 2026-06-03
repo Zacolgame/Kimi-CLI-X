@@ -42,6 +42,13 @@ def test_default_config_dump():
                 "adaptive_preserve_enabled": True,
                 "auto_retrieve_history": True,
                 "auto_retrieve_history_threshold": 5.0,
+                "auto_retrieve_working_memory": True,
+                "auto_retrieve_working_memory_threshold": 5.0,
+                "auto_retrieve_recency_memory": True,
+                "auto_retrieve_recency_memory_threshold": 4.0,
+                "auto_retrieve_recency_weight": 1.0,
+                "auto_retrieve_max_injections_per_turn": 3,
+                "auto_retrieve_max_tokens_per_turn": 2000,
             },
             "background": {
                 "max_running_tasks": 4,

@@ -161,9 +161,40 @@ Embed tool guidelines in system prompts.
 
 ---
 
+## Plan Mode
+
+Plan mode (`/plan`) is a two-stage workflow that separates **planning** from **implementation**:
+
+1. **Generate** — a specialized planner agent (loaded from `agent_planner.json`) analyzes your requirement and writes a comprehensive plan to a Markdown file.
+2. **Implement** — after you review the plan, a regular worker agent executes it.
+
+#### Usage
+
+```
+/plan              # writes to plan.md (default)
+/plan:roadmap.md   # writes to a custom file
+```
+
+After invoking the command, type your requirement. End input with `/end`, or cancel with `/cancel`.
+
+#### Workflow
+
+1. **Input requirement** — describe what you want to build or refactor.
+2. **Planner generates plan** — the planner uses the Note tool to save the plan and auto-opens the file for review.
+3. **Confirm implementation** — answer `y` to hand the plan to a worker agent, or `n` to keep the plan for manual execution.
+
+#### Why use Plan Mode?
+
+- **Complex features** — multi-file refactors, architecture changes, or new modules benefit from upfront design.
+- **Review before commit** — inspect the plan, adjust scope, or split work before any code is written.
+- **Delegation** — the planner acts as a dedicated architect, while the worker focuses on execution.
+
+---
+
 ## Summary
 
 1. **Observe first**: `ReadFile` / `Grep` / `Glob` before modifying
 2. **Minimize changes**: `EditFile` preferred; `WriteFile` only for new files or full rewrites
 3. **Async long tasks**: `Run` timeout → background, manage via `TaskOutput` / `Input`
 4. **Integrate external info**: `FetchURL` for docs and references
+5. **Plan before build**: use `/plan` for complex tasks to separate design from implementation

@@ -53,6 +53,7 @@ from kimi_cli.soul.compaction import (
     estimate_text_tokens,
     should_auto_compact,
 )
+from kimi_cli.utils.tokens import count_tokens
 from kimi_cli.soul.context import Context
 from kimi_cli.soul.dynamic_injection import (
     DynamicInjection,
@@ -230,6 +231,7 @@ class KimiSoul:
         self._current_step_no: int = 0
         self._current_turn_user_text: str = ""
         self._last_auto_retrieved_turn_id: int | None = None
+        self._recently_retrieved_turn_ids: set[int] = set()
         # Pre-warm slug cache so the persisted slug survives process restarts
         if self._plan_session_id is not None and self._runtime.session.state.plan_slug is not None:
             from kimi_cli.tools.plan.heroes import seed_slug_cache
@@ -334,54 +336,181 @@ class KimiSoul:
                 )
         return injections
 
-    async def _maybe_auto_retrieve_history(self) -> DynamicInjection | None:
-        """Auto-inject a relevant archived turn if the current query matches history.
+    async def _maybe_auto_retrieve_history(self) -> list[DynamicInjection]:
+        """Auto-inject relevant turns from long-term, working, and recency memory.
 
-        Only fires on the first step of a turn, when ``auto_retrieve_history`` is
-        enabled, the user query is non-trivial, and a compacted turn scores above
-        the configured BM25 threshold.
+        Returns up to three distinct injections per turn, deduplicated so the
+        same turn_id is never injected twice in the same turn or in the
+        immediately previous auto-retrieval.
+
+        Only fires on the first step of a turn when at least one retrieval tier
+        is enabled and the user query is non-trivial.
         """
-        if not self._loop_control.auto_retrieve_history:
-            return None
+        lc = self._loop_control
+        if not (
+            lc.auto_retrieve_history
+            or lc.auto_retrieve_working_memory
+            or lc.auto_retrieve_recency_memory
+        ):
+            return []
         if self._current_step_no != 1:
-            return None
+            return []
         query = self._current_turn_user_text
         if len(query) < 10:
-            return None
+            return []
 
         try:
-            results = self._history_index.search(query, top_k=3)
+            results = self._history_index.search_with_recency(
+                query,
+                top_k=10,
+                recency_weight=lc.auto_retrieve_recency_weight,
+            )
         except Exception:
             logger.debug("History index search failed during auto-retrieval", exc_info=True)
-            return None
+            return []
 
-        # Filter to compacted/archived turns only and pick the best match
-        compacted = [r for r in results if r.get("is_compacted")]
-        if not compacted:
-            return None
+        # Deduplicate against recently retrieved turn IDs
+        candidates = [
+            r for r in results if r["turn_id"] not in self._recently_retrieved_turn_ids
+        ]
 
-        best = compacted[0]
-        score = best.get("score", 0.0)
-        if score < self._loop_control.auto_retrieve_history_threshold:
-            return None
+        injections: list[DynamicInjection] = []
+        used_turn_ids: set[int] = set()
 
-        turn_id = best.get("turn_id")
-        if turn_id == self._last_auto_retrieved_turn_id:
-            return None
+        wrapper_overhead = 15  # tokens for <system-reminder> tags and newlines
+        budget = lc.auto_retrieve_max_tokens_per_turn
+        spent = 0
 
-        self._last_auto_retrieved_turn_id = turn_id
-        role = best.get("role", "unknown")
-        text = best.get("text", "")
-        citation = (
-            f"[Auto-retrieved from past conversation — relevance: {score:.2f}]\n"
-            f"> **{role}**\n> {text.replace(chr(10), chr(10) + '> ')}"
-        )
-        logger.debug(
-            "Auto-retrieved history turn {turn_id} with score {score}",
-            turn_id=turn_id,
-            score=score,
-        )
-        return DynamicInjection(type="auto_retrieved_history", content=citation)
+        def _can_afford(citation: str, turn_id: int) -> bool:
+            nonlocal spent
+            citation_tokens = count_tokens(citation, model=self.model_name)
+            injection_cost = citation_tokens + wrapper_overhead
+            if spent + injection_cost <= budget:
+                spent += injection_cost
+                return True
+            logger.debug(
+                "Skipping auto-retrieved turn {turn_id}: would exceed token budget "
+                "({spent} + {cost} > {budget})",
+                turn_id=turn_id,
+                spent=spent,
+                cost=injection_cost,
+                budget=budget,
+            )
+            return False
+
+        # ── A. Long-term memory (compacted turns) ────────────────────────────
+        if lc.auto_retrieve_history:
+            compacted = [
+                r for r in candidates if r.get("is_compacted") and r["turn_id"] not in used_turn_ids
+            ]
+            if compacted:
+                best = compacted[0]
+                score = best.get("score", 0.0)
+                if score >= lc.auto_retrieve_history_threshold:
+                    turn_id = best["turn_id"]
+                    role = best.get("role", "unknown")
+                    text = best.get("text", "")
+                    citation = (
+                        f"[Auto-retrieved from past conversation — relevance: {score:.2f}]\n"
+                        f"> **{role}**\n> {text.replace(chr(10), chr(10) + '> ')}"
+                    )
+                    if _can_afford(citation, turn_id):
+                        used_turn_ids.add(turn_id)
+                        logger.debug(
+                            "Auto-retrieved history turn {turn_id} with score {score}",
+                            turn_id=turn_id,
+                            score=score,
+                        )
+                        injections.append(
+                            DynamicInjection(type="auto_retrieved_history", content=citation)
+                        )
+
+        # ── B. Working memory (non-compacted turns, excluding recent context) ─
+        if lc.auto_retrieve_working_memory:
+            # Exclude the last 2 non-compacted turns (last user+assistant pair)
+            # because they are already at the end of the LLM context.
+            non_compacted = [
+                r
+                for r in candidates
+                if not r.get("is_compacted") and r["turn_id"] not in used_turn_ids
+            ]
+            # Find the most recent non-compacted turn_ids to exclude
+            all_non_compacted_turn_ids = [
+                t["turn_id"] for t in self._history_index._turns if not t.get("is_compacted")
+            ]
+            recent_turn_ids = set(all_non_compacted_turn_ids[-2:]) if len(all_non_compacted_turn_ids) >= 2 else set(all_non_compacted_turn_ids)
+            eligible = [
+                r for r in non_compacted if r["turn_id"] not in recent_turn_ids
+            ]
+            if eligible:
+                best = eligible[0]
+                score = best.get("score", 0.0)
+                if score >= lc.auto_retrieve_working_memory_threshold:
+                    turn_id = best["turn_id"]
+                    role = best.get("role", "unknown")
+                    text = best.get("text", "")
+                    citation = (
+                        f"[Relevant context from our current conversation]\n"
+                        f"> **{role}**\n> {text.replace(chr(10), chr(10) + '> ')}"
+                    )
+                    if _can_afford(citation, turn_id):
+                        used_turn_ids.add(turn_id)
+                        logger.debug(
+                            "Auto-retrieved working memory turn {turn_id} with score {score}",
+                            turn_id=turn_id,
+                            score=score,
+                        )
+                        injections.append(
+                            DynamicInjection(type="working_memory", content=citation)
+                        )
+
+        # ── C. Recency memory (best boosted score, compacted or non-compacted) ─
+        if lc.auto_retrieve_recency_memory:
+            eligible = [
+                r
+                for r in candidates
+                if r["turn_id"] not in used_turn_ids
+                and r.get("boosted_score", 0.0) >= lc.auto_retrieve_recency_memory_threshold
+            ]
+            if eligible:
+                best = eligible[0]
+                turn_id = best["turn_id"]
+                role = best.get("role", "unknown")
+                text = best.get("text", "")
+                boosted_score = best.get("boosted_score", 0.0)
+                citation = (
+                    f"[Recently discussed — relevance: {boosted_score:.2f}]\n"
+                    f"> **{role}**\n> {text.replace(chr(10), chr(10) + '> ')}"
+                )
+                if _can_afford(citation, turn_id):
+                    used_turn_ids.add(turn_id)
+                    logger.debug(
+                        "Auto-retrieved recency memory turn {turn_id} with boosted_score {boosted_score}",
+                        turn_id=turn_id,
+                        boosted_score=boosted_score,
+                    )
+                    injections.append(
+                        DynamicInjection(type="recency_memory", content=citation)
+                    )
+
+        # Respect the per-turn cap
+        max_inj = lc.auto_retrieve_max_injections_per_turn
+        if len(injections) > max_inj:
+            injections = injections[:max_inj]
+            used_turn_ids = set(list(used_turn_ids)[:max_inj])
+
+        # Update dedup tracking
+        for turn_id in used_turn_ids:
+            self._recently_retrieved_turn_ids.add(turn_id)
+        # Keep the set bounded to the last ~10 IDs (turn_id is monotonically
+        # increasing, so the smallest id is the oldest).
+        while len(self._recently_retrieved_turn_ids) > 10:
+            self._recently_retrieved_turn_ids.discard(min(self._recently_retrieved_turn_ids))
+        # Update backward-compat single-ID tracker with the most recent injection
+        if used_turn_ids:
+            self._last_auto_retrieved_turn_id = max(used_turn_ids)
+
+        return injections
 
     async def _notify_injection_providers_compacted(self) -> None:
         """Notify all injection providers that the context has been compacted.
@@ -1120,10 +1249,11 @@ class KimiSoul:
         # ═══════════════════════════════════════════════════════════════════════
         # 2e.2. DYNAMIC INJECTION
         # ═══════════════════════════════════════════════════════════════════════
-        auto_retrieval_injection = await self._maybe_auto_retrieve_history()
+        auto_retrieval_injections = await self._maybe_auto_retrieve_history()
         injections = await self._collect_injections()
-        if auto_retrieval_injection is not None:
-            injections.insert(0, auto_retrieval_injection)
+        # Prepend auto-retrieved injections so they appear before provider injections
+        for inj in reversed(auto_retrieval_injections):
+            injections.insert(0, inj)
         if injections:
             combined_reminders = "\n".join(system_reminder(inj.content).text for inj in injections)
             await self._context.append_message(
@@ -1389,6 +1519,7 @@ class KimiSoul:
         # Mark all indexed turns as archived before clearing context
         self._history_index.mark_compacted()
         self._history_index.save()
+        self._recently_retrieved_turn_ids.clear()
         await self._context.clear()
         await self._context.write_system_prompt(self._agent.get_system_prompt(is_compacting=True))
         await self._checkpoint()

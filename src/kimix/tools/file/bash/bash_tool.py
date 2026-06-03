@@ -367,7 +367,7 @@ class Bash(CallableTool2[BashParams]):
     """Execute a bash command via the system bash, with background task support."""
 
     name: str = "Bash"
-    description: str = "Execute a bash command."
+    description: str = "Execute a bash command. Supports Unix-style / POSIX bash syntax."
     params: type[BashParams] = BashParams
 
     def __init__(self, session: Session):

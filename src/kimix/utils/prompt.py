@@ -146,12 +146,12 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
     planner_session: Session | None = None
 
     try:
-        planner_session = await _create_session_async(agent_type=SystemPromptType.TodoMaker)
+        planner_session = await _create_session_async(agent_type=SystemPromptType.TodoMaker, agent_file='agent_planner.json')
         planner_session.get_custom_data()["note_writing_path"] = plan_file
 
         reminder = (
             "read the following requirement carefully and generate a comprehensive plan. "
-            "Save the complete plan to a file using the Note tool.\n\n"
+            f"Save the complete plan to a file using the Note tool or write to `{plan_file}`.\n\n"
             f"Requirement:\n{requirement.strip()}"
         )
 
