@@ -189,8 +189,6 @@ class StatusUpdate(BaseModel):
     """The token usage statistics of the current step."""
     message_id: str | None = None
     """The message ID of the current step."""
-    plan_mode: bool | None = None
-    """Whether plan mode (read-only) is active. None means no change."""
     mcp_status: MCPStatusSnapshot | None = None
     """The current MCP startup snapshot. None means no change."""
 
@@ -208,15 +206,6 @@ class Notification(BaseModel):
     severity: str
     created_at: float
     payload: dict[str, JsonType] = Field(default_factory=dict)
-
-
-class PlanDisplay(BaseModel):
-    """Displays a plan's content inline in the chat with special formatting."""
-
-    content: str
-    """The full markdown content of the plan."""
-    file_path: str
-    """The path to the plan file for reference."""
 
 
 class BtwBegin(BaseModel):
@@ -534,7 +523,6 @@ type Event = (
     | ToolResult
     | ApprovalResponse
     | SubagentEvent
-    | PlanDisplay
     | BtwBegin
     | BtwEnd
 )
@@ -683,7 +671,6 @@ __all__ = [
     "ToolResult",
     "ApprovalResponse",
     "SubagentEvent",
-    "PlanDisplay",
     "BtwBegin",
     "BtwEnd",
     "ApprovalRequest",

@@ -97,7 +97,6 @@ interface ClientCapabilities {
   /** 是否支持处理 QuestionRequest 消息 */
   supports_question?: boolean
   /** 是否支持 Plan 模式 */
-  supports_plan_mode?: boolean
 }
 
 interface WireHookSubscription {
@@ -317,8 +316,6 @@ interface SteerResult {
 {"jsonrpc": "2.0", "id": "7ca7c810-9dad-11d1-80b4-00c04fd430c8", "error": {"code": -32000, "message": "No agent turn is in progress"}}
 ```
 
-### `set_plan_mode`
-
 ::: info 新增
 新增于 Wire 1.4。
 :::
@@ -328,36 +325,27 @@ interface SteerResult {
 
 将 Plan 模式设置为指定状态。调用后 Agent 会更新 Plan 模式并通过 `StatusUpdate` 事件通知新的状态。
 
-此功能需要能力协商：Client 在 `initialize` 时通过 `capabilities.supports_plan_mode: true` 声明支持后，Agent 才会启用 Plan 模式相关工具（`EnterPlanMode`、`ExitPlanMode`）。如果 Client 未声明支持，这些工具会从 LLM 的工具列表中自动隐藏。
-
 Plan 模式状态会持久化到会话中，因此在进程重启后可以恢复。
 
 ```typescript
-/** set_plan_mode 请求参数 */
-interface SetPlanModeParams {
   /** 是否启用 Plan 模式 */
   enabled: boolean
 }
 
-/** set_plan_mode 响应结果 */
-interface SetPlanModeResult {
   /** 固定为 "ok" */
   status: "ok"
   /** 调用后的 Plan 模式状态 */
-  plan_mode: boolean
 }
 ```
 
 **请求示例**
 
 ```json
-{"jsonrpc": "2.0", "method": "set_plan_mode", "id": "8da7d810-9dad-11d1-80b4-00c04fd430c8", "params": {"enabled": true}}
 ```
 
 **成功响应示例**
 
 ```json
-{"jsonrpc": "2.0", "id": "8da7d810-9dad-11d1-80b4-00c04fd430c8", "result": {"status": "ok", "plan_mode": true}}
 ```
 
 **错误响应示例**
@@ -365,7 +353,6 @@ interface SetPlanModeResult {
 如果当前环境不支持 Plan 模式：
 
 ```json
-{"jsonrpc": "2.0", "id": "8da7d810-9dad-11d1-80b4-00c04fd430c8", "error": {"code": -32000, "message": "Plan mode is not supported"}}
 ```
 
 ### `cancel`
@@ -502,7 +489,6 @@ type Event =
   | BtwBegin
   | BtwEnd
   | SteerInput
-  | PlanDisplay
   | HookTriggered
   | HookResolved
 
@@ -600,7 +586,6 @@ interface StatusUpdate {
   /** 当前步骤的消息 ID，JSON 中可能不存在 */
   message_id?: string | null
   /** Plan 模式是否激活，null 表示状态未变更，JSON 中可能不存在 */
-  plan_mode?: boolean | null
 }
 
 interface TokenUsage {
@@ -820,16 +805,11 @@ interface SteerInput {
 }
 ```
 
-### `PlanDisplay`
-
 ::: info 新增
 新增于 Wire 1.7。
 :::
 
-Plan 内容展示事件。当 Agent 在 Plan 模式下调用 `ExitPlanMode` 提交计划供用户审批时，会先发送此事件，将计划内容以内联方式展示在聊天记录中。Client 应将其渲染为带边框的面板或类似的视觉区分样式，并展示文件路径供用户参考。
-
 ```typescript
-interface PlanDisplay {
   /** 计划的完整 Markdown 内容 */
   content: string
   /** 计划文件的路径 */

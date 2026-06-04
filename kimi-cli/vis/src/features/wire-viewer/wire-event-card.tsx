@@ -72,8 +72,6 @@ export const TYPE_COLORS: Record<string, string> = {
   TextPart: "bg-gray-500/15 text-gray-700 dark:text-gray-300 border-gray-500/30",
   ThinkPart:
     "bg-gray-500/15 text-gray-700 dark:text-gray-300 border-gray-500/30",
-  PlanDisplay:
-    "bg-teal-500/15 text-teal-700 dark:text-teal-300 border-teal-500/30",
   ToolCall:
     "bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30",
   ToolResult:
@@ -258,11 +256,6 @@ function getSummary(event: WireEvent): string {
       const title = String(p.title ?? "");
       const prefix = severity ? `[${severity}] ` : "";
       return `${prefix}${truncate(title, 100)}`;
-    }
-    case "PlanDisplay": {
-      const content = String(p.content ?? "");
-      const filePath = p.file_path as string | undefined;
-      return filePath ? `${filePath}: ${truncate(content, 80)}` : truncate(content, 120);
     }
     case "ToolCallRequest": {
       const name = p.name as string | undefined;

@@ -32,9 +32,6 @@ class SessionState(BaseModel):
     custom_title: str | None = None
     title_generated: bool = False
     title_generate_attempts: int = 0
-    plan_mode: bool = False
-    plan_session_id: str | None = None
-    plan_slug: str | None = None
     # Archive state (previously in metadata.json)
     wire_mtime: float | None = None
     archived: bool = False

@@ -336,7 +336,7 @@ async def test_step_merges_plain_steer_with_dynamic_injection_in_model_history(
         )
 
     async def fake_collect_injections() -> list[DynamicInjection]:
-        return [DynamicInjection(type="plan_mode", content="Internal reminder")]
+        return [DynamicInjection(type="test_reminder", content="Internal reminder")]
 
     monkeypatch.setattr(
         soul,

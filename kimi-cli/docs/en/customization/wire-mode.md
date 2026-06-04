@@ -96,8 +96,6 @@ interface InitializeParams {
 interface ClientCapabilities {
   /** Whether the client can handle QuestionRequest messages */
   supports_question?: boolean
-  /** Whether the client supports plan mode */
-  supports_plan_mode?: boolean
 }
 
 interface WireHookSubscription {
@@ -317,8 +315,6 @@ If no turn is in progress:
 {"jsonrpc": "2.0", "id": "7ca7c810-9dad-11d1-80b4-00c04fd430c8", "error": {"code": -32000, "message": "No agent turn is in progress"}}
 ```
 
-### `set_plan_mode`
-
 ::: info Added
 Added in Wire 1.4.
 :::
@@ -326,46 +322,28 @@ Added in Wire 1.4.
 - **Direction**: Client → Agent
 - **Type**: Request (requires response)
 
-Set plan mode to a specific state. After calling, the agent updates plan mode and sends a `StatusUpdate` event with the new state.
-
-This feature requires capability negotiation: the client must declare `capabilities.supports_plan_mode: true` during `initialize` for the agent to enable plan mode tools (`EnterPlanMode`, `ExitPlanMode`). If the client does not declare support, these tools are automatically hidden from the LLM's tool list.
-
-Plan mode state is persisted to the session, so it survives process restarts and is restored when the session resumes.
-
 ```typescript
-/** set_plan_mode request parameters */
-interface SetPlanModeParams {
-  /** Whether to enable plan mode */
   enabled: boolean
 }
 
-/** set_plan_mode response result */
-interface SetPlanModeResult {
   /** Fixed as "ok" */
   status: "ok"
-  /** Plan mode state after the call */
-  plan_mode: boolean
 }
 ```
 
 **Request example**
 
 ```json
-{"jsonrpc": "2.0", "method": "set_plan_mode", "id": "8da7d810-9dad-11d1-80b4-00c04fd430c8", "params": {"enabled": true}}
 ```
 
 **Success response example**
 
 ```json
-{"jsonrpc": "2.0", "id": "8da7d810-9dad-11d1-80b4-00c04fd430c8", "result": {"status": "ok", "plan_mode": true}}
 ```
 
 **Error response example**
 
-If plan mode is not supported in the current environment:
-
 ```json
-{"jsonrpc": "2.0", "id": "8da7d810-9dad-11d1-80b4-00c04fd430c8", "error": {"code": -32000, "message": "Plan mode is not supported"}}
 ```
 
 ### `cancel`
@@ -502,7 +480,6 @@ type Event =
   | BtwBegin
   | BtwEnd
   | SteerInput
-  | PlanDisplay
   | HookTriggered
   | HookResolved
 
@@ -599,8 +576,6 @@ interface StatusUpdate {
   token_usage?: TokenUsage | null
   /** Message ID for current step, may be absent in JSON */
   message_id?: string | null
-  /** Whether plan mode (read-only) is active, null means no change, may be absent in JSON */
-  plan_mode?: boolean | null
 }
 
 interface TokenUsage {
@@ -820,16 +795,11 @@ interface SteerInput {
 }
 ```
 
-### `PlanDisplay`
-
 ::: info Added
 Added in Wire 1.7.
 :::
 
-Plan content display event. When the agent calls `ExitPlanMode` to submit a plan for user approval in plan mode, this event is sent first to display the plan content inline in the chat. Clients should render it as a bordered panel or similar visually distinct element, and show the file path for reference.
-
 ```typescript
-interface PlanDisplay {
   /** Full markdown content of the plan */
   content: string
   /** Path to the plan file */

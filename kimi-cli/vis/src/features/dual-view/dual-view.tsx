@@ -33,7 +33,6 @@ const TYPE_COLORS: Record<string, string> = {
   Notification: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-300",
   TextPart: "bg-gray-500/15 text-gray-700 dark:text-gray-300",
   ThinkPart: "bg-gray-500/15 text-gray-700 dark:text-gray-300",
-  PlanDisplay: "bg-teal-500/15 text-teal-700 dark:text-teal-300",
   ToolCall: "bg-purple-500/15 text-purple-700 dark:text-purple-300",
   ToolResult: "bg-purple-500/15 text-purple-700 dark:text-purple-300",
   ToolCallPart: "bg-purple-500/15 text-purple-700 dark:text-purple-300",

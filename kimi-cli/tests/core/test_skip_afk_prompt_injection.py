@@ -14,7 +14,6 @@ from kosong.tooling.empty import EmptyToolset
 from kimi_cli.soul.agent import Agent, Runtime
 from kimi_cli.soul.context import Context
 from kimi_cli.soul.dynamic_injections.afk_mode import AfkModeInjectionProvider
-from kimi_cli.soul.dynamic_injections.plan_mode import PlanModeInjectionProvider
 from kimi_cli.soul.kimisoul import KimiSoul
 
 
@@ -41,8 +40,6 @@ def test_skip_afk_prompt_injection_gates_afk_provider(
     soul = _make_soul(runtime, tmp_path)
     types_ = _provider_types(soul)
 
-    # Plan is always present and never gated by this flag.
-    assert PlanModeInjectionProvider in types_
     assert not any(provider.__name__.lower().startswith("yolo") for provider in types_)
 
     if skip:

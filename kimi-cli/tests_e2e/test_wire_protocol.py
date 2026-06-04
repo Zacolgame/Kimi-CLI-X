@@ -67,7 +67,6 @@ def test_initialize_handshake(tmp_path) -> None:
                         },
                         {
                             "name": "plan",
-                            "description": "Toggle plan mode. Usage: /plan [on|off|view|clear]",
                             "aliases": [],
                         },
                         {
@@ -177,7 +176,6 @@ def test_initialize_external_tool_conflict(tmp_path) -> None:
                         },
                         {
                             "name": "plan",
-                            "description": "Toggle plan mode. Usage: /plan [on|off|view|clear]",
                             "aliases": [],
                         },
                         {
@@ -334,7 +332,6 @@ def test_external_tool_call(tmp_path) -> None:
                         "max_context_tokens": None,
                         "token_usage": None,
                         "message_id": None,
-                        "plan_mode": False,
                         "mcp_status": None,
                     },
                 },
@@ -376,7 +373,6 @@ def test_external_tool_call(tmp_path) -> None:
                         "max_context_tokens": None,
                         "token_usage": None,
                         "message_id": None,
-                        "plan_mode": False,
                         "mcp_status": None,
                     },
                 },
@@ -428,7 +424,6 @@ def test_prompt_without_initialize(tmp_path) -> None:
                         "max_context_tokens": None,
                         "token_usage": None,
                         "message_id": None,
-                        "plan_mode": False,
                         "mcp_status": None,
                     },
                 },

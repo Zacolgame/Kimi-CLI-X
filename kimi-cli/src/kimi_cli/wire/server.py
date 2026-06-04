@@ -51,7 +51,6 @@ from .jsonrpc import (
     JSONRPCPromptMessage,
     JSONRPCReplayMessage,
     JSONRPCRequestMessage,
-    JSONRPCSetPlanModeMessage,
     JSONRPCSteerMessage,
     JSONRPCSuccessResponse,
     Statuses,
@@ -98,8 +97,6 @@ class WireServer:
         """Maps JSON RPC message IDs to pending `Request`s."""
         self._client_supports_question: bool = False
         """Whether the Wire client supports QuestionRequest."""
-        self._client_supports_plan_mode: bool = False
-        """Whether the Wire client supports plan mode."""
         self._initialized: bool = False
         self._root_hub_queue: Queue[Any] | None = None
         self._root_hub_task: asyncio.Task[None] | None = None
@@ -363,8 +360,6 @@ class WireServer:
                     resp = await self._handle_replay(msg)
                 case JSONRPCSteerMessage():
                     resp = await self._handle_steer(msg)
-                case JSONRPCSetPlanModeMessage():
-                    resp = await self._handle_set_plan_mode(msg)
                 case JSONRPCCancelMessage():
                     resp = await self._handle_cancel(msg)
                 case JSONRPCSuccessResponse() | JSONRPCErrorResponse():
@@ -529,11 +524,9 @@ class WireServer:
 
         if msg.params.capabilities is not None:
             self._client_supports_question = msg.params.capabilities.supports_question
-            self._client_supports_plan_mode = msg.params.capabilities.supports_plan_mode
 
         if toolset is not None:
             self._sync_ask_user_tool_visibility(toolset)
-            self._sync_plan_mode_tool_visibility(toolset)
 
         self._initialized = True
         if self._approval_runtime is not None:
@@ -578,27 +571,6 @@ class WireServer:
             logger.info(
                 "Hid {tool} tool: client does not support questions",
                 tool=ASK_USER_TOOL_NAME,
-            )
-
-    def _sync_plan_mode_tool_visibility(self, toolset: KimiToolset) -> None:
-        """Hide or unhide plan mode tools based on client capabilities."""
-        from kimi_cli.tools.plan import NAME as EXIT_PLAN_MODE_TOOL_NAME
-        from kimi_cli.tools.plan.enter import NAME as ENTER_PLAN_MODE_TOOL_NAME
-
-        plan_tool_names = [ENTER_PLAN_MODE_TOOL_NAME, EXIT_PLAN_MODE_TOOL_NAME]
-
-        all_toolsets = [toolset]
-
-        if self._client_supports_plan_mode:
-            for ts in all_toolsets:
-                for name in plan_tool_names:
-                    ts.unhide(name)
-        else:
-            for ts in all_toolsets:
-                for name in plan_tool_names:
-                    ts.hide(name)
-            logger.info(
-                "Hide plan mode tools: client does not support plan mode",
             )
 
     def _apply_wire_client_info(self, client: ClientInfo | None) -> None:
@@ -757,29 +729,6 @@ class WireServer:
         return JSONRPCSuccessResponse(
             id=msg.id,
             result={"status": Statuses.STEERED},
-        )
-
-    async def _handle_set_plan_mode(
-        self, msg: JSONRPCSetPlanModeMessage
-    ) -> JSONRPCSuccessResponse | JSONRPCErrorResponse:
-        if not isinstance(self._soul, KimiSoul):
-            return JSONRPCErrorResponse(
-                id=msg.id,
-                error=JSONRPCErrorObject(
-                    code=ErrorCodes.INVALID_STATE,
-                    message="Plan mode is not supported",
-                ),
-            )
-
-        new_state = await self._soul.set_plan_mode_from_manual(msg.params.enabled)
-
-        status = StatusUpdate(plan_mode=new_state)
-        await self._send_msg(JSONRPCEventMessage(params=status))
-        # Persist to wire file so replay reconstructs plan mode state
-        await self._soul.wire_file.append_message(status)
-        return JSONRPCSuccessResponse(
-            id=msg.id,
-            result={"status": "ok", "plan_mode": new_state},
         )
 
     async def _handle_replay(

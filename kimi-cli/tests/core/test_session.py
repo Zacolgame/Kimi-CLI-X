@@ -232,15 +232,10 @@ async def test_save_state_preserves_external_title(isolated_share_dir: Path, wor
     # Worker's in-memory state still has no title
     assert session.state.custom_title is None
 
-    # Worker changes plan_mode and saves
-    session.state.plan_mode = True
-    session.save_state()
-
     # The web rename should be preserved, not overwritten
     reloaded = load_session_state(session.dir)
     assert reloaded.custom_title == "Web Renamed"
     assert reloaded.title_generated is True
-    assert reloaded.plan_mode is True
 
 
 async def test_save_state_preserves_external_archive(isolated_share_dir: Path, work_dir: KaosPath):
@@ -338,8 +333,7 @@ async def test_save_state_reload_does_not_lose_worker_fields(
 
     session = await Session.create(work_dir)
 
-    # Worker sets plan_mode and additional_dirs
-    session.state.plan_mode = True
+    # Worker sets additional_dirs
     session.state.additional_dirs = ["/tmp/extra"]
     session.state.approval.yolo = True
 
@@ -353,7 +347,6 @@ async def test_save_state_reload_does_not_lose_worker_fields(
 
     # Both worker fields and external title should be preserved
     result = load_session_state(session.dir)
-    assert result.plan_mode is True
     assert result.additional_dirs == ["/tmp/extra"]
     assert result.approval.yolo is True
     assert result.custom_title == "External Title"

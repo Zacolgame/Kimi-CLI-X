@@ -132,7 +132,6 @@ import {
   type SessionStatusPayload,
   type StepRetryEvent,
   type SubagentEventWire,
-  type PlanDisplayEvent,
   extractEvent,
 } from "./wireTypes";
 import { createMessageId, getApiBaseUrl } from "./utils";
@@ -290,10 +289,6 @@ type UseSessionStreamReturn = {
   clearMessages: () => void;
   /** Connection error if any */
   error: Error | null;
-  /** Whether plan mode is active */
-  planMode: boolean;
-  /** Set plan mode via silent RPC (no context message) */
-  sendSetPlanMode: (enabled: boolean) => void;
   /** Available slash commands from the server */
   slashCommands: SlashCommandDef[];
 };
@@ -337,7 +332,6 @@ export function useSessionStream(
   );
   const [contextUsage, setContextUsage] = useState(0);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
-  const [planMode, setPlanMode] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -998,7 +992,6 @@ export function useSessionStream(
     setCurrentStep(0);
     setContextUsage(0);
     setTokenUsage(null);
-    setPlanMode(false);
     setError(null);
     setSessionStatus(null);
     lastStatusSeqRef.current = null;
@@ -1899,11 +1892,6 @@ export function useSessionStream(
             setTokenUsage(nextTokenUsage);
           }
 
-          const nextPlanMode = event.payload.plan_mode;
-          if (typeof nextPlanMode === "boolean") {
-            setPlanMode(nextPlanMode);
-          }
-
           // If we have a message_id, create a special message to display it
           const messageId = event.payload.message_id;
           if (messageId) {
@@ -2103,24 +2091,7 @@ export function useSessionStream(
           break;
         }
 
-        case "PlanDisplay": {
-          const planPayload = (event as PlanDisplayEvent).payload;
-          const planMessageId = getNextMessageId("assistant");
-          upsertMessage({
-            id: planMessageId,
-            role: "assistant",
-            variant: "text",
-            turnIndex:
-              turnCounterRef.current > 0
-                ? turnCounterRef.current - 1
-                : undefined,
-            content: planPayload.content,
-            isStreaming: false,
-          });
-          break;
-        }
-
-        default:
+        // ========================
           break;
       }
     },
@@ -2157,7 +2128,6 @@ export function useSessionStream(
         },
         capabilities: {
           supports_question: true,
-          supports_plan_mode: true,
         },
       },
     };
@@ -2999,20 +2969,6 @@ export function useSessionStream(
     resetStateRef.current(true);
   }, [setMessages]);
 
-  // Set plan mode via silent RPC (no context message)
-  const sendSetPlanMode = useCallback((enabled: boolean) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    const message: JsonRpcRequest = {
-      jsonrpc: "2.0",
-      method: "set_plan_mode",
-      id: uuidV4(),
-      params: { enabled },
-    };
-    wsRef.current.send(JSON.stringify(message));
-  }, []);
-
   // Auto-connect when sessionId changes
   useLayoutEffect(() => {
     /**
@@ -3095,8 +3051,6 @@ export function useSessionStream(
     setMessages,
     clearMessages,
     error,
-    planMode,
-    sendSetPlanMode,
     slashCommands,
   };
 }

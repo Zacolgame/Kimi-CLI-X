@@ -166,13 +166,6 @@ def kimi(
             help="Automatically approve all actions. Default: no.",
         ),
     ] = False,
-    plan: Annotated[
-        bool,
-        typer.Option(
-            "--plan",
-            help="Start in plan mode. Default: no.",
-        ),
-    ] = False,
     afk: Annotated[
         bool,
         typer.Option(
@@ -465,7 +458,6 @@ def kimi(
             yolo=yolo,
             afk=afk,
             runtime_afk=False,
-            plan_mode=plan,
             resumed=resumed,
             agent_file=agent_file,
             mcp_configs=mcp_configs,

@@ -142,7 +142,6 @@ export type StatusUpdateEvent = {
     context_usage: number | null;
     token_usage?: TokenUsage | null;
     message_id?: string;
-    plan_mode?: boolean | null;
   };
 };
 
@@ -255,14 +254,6 @@ export type SteerInputEvent = {
   };
 };
 
-export type PlanDisplayEvent = {
-  type: "PlanDisplay";
-  payload: {
-    content: string;
-    file_path: string;
-  };
-};
-
 // Union of all event types
 export type WireEvent =
   | TurnBeginEvent
@@ -284,7 +275,6 @@ export type WireEvent =
   | QuestionRequestEvent
   | SubagentEventWire
   | SteerInputEvent
-  | PlanDisplayEvent;
 
 // Parsed wire message
 export type WireMessage = {

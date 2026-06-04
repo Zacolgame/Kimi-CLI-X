@@ -264,17 +264,10 @@ This command starts a temporary sub-session to analyze the codebase structure an
 
 ### `/plan`
 
-Toggle plan mode. In plan mode, the AI can only use read-only tools to explore the codebase, writing an implementation plan to a plan file and submitting it for your approval. See [Plan mode](../guides/interaction.md#plan-mode) for details.
-
 Usage:
 
-- `/plan`: Toggle plan mode
-- `/plan on`: Enable plan mode
-- `/plan off`: Disable plan mode
 - `/plan view`: View the current plan content
 - `/plan clear`: Clear the current plan file
-
-When plan mode is enabled, the prompt changes to `📋` and a blue `plan` badge appears in the status bar.
 
 ### `/task`
 

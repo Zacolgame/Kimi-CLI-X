@@ -148,47 +148,6 @@ async def afk(soul: KimiSoul, args: str):
         )
 
 
-@registry.command
-async def plan(soul: KimiSoul, args: str):
-    """Toggle plan mode. Usage: /plan [on|off|view|clear]"""
-    subcmd = args.strip().lower()
-
-    if subcmd == "on":
-        if not soul.plan_mode:
-            await soul.toggle_plan_mode_from_manual()
-        plan_path = soul.get_plan_file_path()
-        wire_send(TextPart(text=f"Plan mode ON. Plan file: {plan_path}"))
-        wire_send(StatusUpdate(plan_mode=soul.plan_mode))
-    elif subcmd == "off":
-        if soul.plan_mode:
-            await soul.toggle_plan_mode_from_manual()
-        wire_send(TextPart(text="Plan mode OFF. All tools are now available."))
-        wire_send(StatusUpdate(plan_mode=soul.plan_mode))
-    elif subcmd == "view":
-        content = soul.read_current_plan()
-        if content:
-            wire_send(TextPart(text=content))
-        else:
-            wire_send(TextPart(text="No plan file found for this session."))
-    elif subcmd == "clear":
-        soul.clear_current_plan()
-        wire_send(TextPart(text="Plan cleared."))
-    else:
-        # Default: toggle
-        new_state = await soul.toggle_plan_mode_from_manual()
-        if new_state:
-            plan_path = soul.get_plan_file_path()
-            wire_send(
-                TextPart(
-                    text=f"Plan mode ON. Write your plan to: {plan_path}\n"
-                    "Use ExitPlanMode when done, or /plan off to exit manually."
-                )
-            )
-        else:
-            wire_send(TextPart(text="Plan mode OFF. All tools are now available."))
-        wire_send(StatusUpdate(plan_mode=soul.plan_mode))
-
-
 @registry.command(name="add-dir")
 async def add_dir(soul: KimiSoul, args: str):
     """Add a directory to the workspace. Usage: /add-dir <path>. Run without args to list added dirs"""  # noqa: E501

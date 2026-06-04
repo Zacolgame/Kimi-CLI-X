@@ -327,14 +327,6 @@ async def test_background_tools_reject_non_root_runtime(
 
 
 @pytest.mark.asyncio
-async def test_task_stop_blocks_in_plan_mode(runtime, task_stop_tool):
-    runtime.session.state.plan_mode = True
-    result = await task_stop_tool(task_stop_tool.params(task_id="b-noop"))
-    assert result.is_error
-    assert result.brief == "Blocked in plan mode"
-
-
-@pytest.mark.asyncio
 async def test_task_stop_rejected_by_approval(runtime, task_stop_tool, monkeypatch):
     spec = _write_task(
         runtime,

@@ -287,12 +287,6 @@ class TaskStop(CallableTool2[TaskStopParams]):
     async def __call__(self, params: TaskStopParams) -> ToolReturnValue:
         if err := _ensure_root(self._runtime):
             return err
-        if self._runtime.session.state.plan_mode:
-            return ToolError(
-                message="TaskStop is not available in plan mode.",
-                brief="Blocked in plan mode",
-            )
-
         view = self._runtime.background_tasks.get_task(params.task_id)
         if view is None:
             return ToolError(message=f"Task not found: {params.task_id}", brief="Task not found")

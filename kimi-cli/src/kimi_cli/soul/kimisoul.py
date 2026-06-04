@@ -61,7 +61,6 @@ from kimi_cli.soul.dynamic_injection import (
     normalize_history,
 )
 from kimi_cli.soul.dynamic_injections.afk_mode import AfkModeInjectionProvider
-from kimi_cli.soul.dynamic_injections.plan_mode import PlanModeInjectionProvider
 from kimi_cli.soul.message import check_message, system, system_reminder, tool_result_to_message
 from kimi_cli.soul.slash import registry as soul_slash_registry
 from kimi_cli.soul.toolset import KimiToolset
@@ -225,23 +224,12 @@ class KimiSoul:
 
         self._steer_queue: asyncio.Queue[str | list[ContentPart]] = asyncio.Queue()
         self._last_tool_calls: list[tuple[str, str]] = []
-        self._plan_mode: bool = self._runtime.session.state.plan_mode
-        self._plan_session_id: str | None = self._runtime.session.state.plan_session_id
         self._current_turn_id: str = ""
         self._current_step_no: int = 0
         self._current_turn_user_text: str = ""
         self._last_auto_retrieved_turn_id: int | None = None
         self._recently_retrieved_turn_ids: set[int] = set()
-        # Pre-warm slug cache so the persisted slug survives process restarts
-        if self._plan_session_id is not None and self._runtime.session.state.plan_slug is not None:
-            from kimi_cli.tools.plan.heroes import seed_slug_cache
-
-            seed_slug_cache(self._plan_session_id, self._runtime.session.state.plan_slug)
-        self._pending_plan_activation_injection: bool = False
-        if self._plan_mode:
-            self._ensure_plan_session_id()
         self._injection_providers: list[DynamicInjectionProvider] = [
-            PlanModeInjectionProvider(),
             *(
                 []
                 if self._runtime.config.skip_afk_prompt_injection
@@ -252,9 +240,6 @@ class KimiSoul:
         self._stop_hook_active: bool = False
         if self.is_root:
             self._runtime.notifications.ack_ids("llm", extract_notification_ids(context.history))
-
-        # Bind plan mode state to tools that support it
-        self._bind_plan_mode_tools()
 
         self._slash_commands = self._build_slash_commands()
         self._slash_command_map = self._index_slash_commands(self._slash_commands)
@@ -302,11 +287,6 @@ class KimiSoul:
     def is_subagent(self) -> bool:
         """Whether this soul is running as a subagent rather than the root session."""
         return self._runtime.role == "subagent"
-
-    @property
-    def plan_mode(self) -> bool:
-        """Whether plan mode (read-only research and planning) is active."""
-        return self._plan_mode
 
     @property
     def hook_engine(self) -> HookEngine:
@@ -541,145 +521,6 @@ class KimiSoul:
                     exc_info=True,
                 )
 
-    def _bind_plan_mode_tools(self) -> None:
-        """Bind plan mode state to tools that support it."""
-        if not isinstance(self._agent.toolset, KimiToolset):
-            return
-
-        def checker() -> bool:
-            return self._plan_mode
-
-        def path_getter() -> Path | None:
-            return self.get_plan_file_path()
-
-        write_line_tool = self._agent.toolset.find("WriteLine")
-        if write_line_tool and hasattr(write_line_tool, 'bind_plan_mode') and callable(getattr(write_line_tool, 'bind_plan_mode')):
-            write_line_tool.bind_plan_mode(checker, path_getter)
-
-        # ExitPlanMode has a special bind() method
-        from kimi_cli.tools.plan import ExitPlanMode
-
-        exit_tool = self._agent.toolset.find("ExitPlanMode")
-        if isinstance(exit_tool, ExitPlanMode):
-            exit_tool.bind(
-                self.toggle_plan_mode,
-                path_getter,
-                checker,
-                self._approval.is_afk,
-            )
-
-        # EnterPlanMode has a special bind() method
-        from kimi_cli.tools.plan.enter import EnterPlanMode
-
-        enter_tool = self._agent.toolset.find("EnterPlanMode")
-        if isinstance(enter_tool, EnterPlanMode):
-            enter_tool.bind(
-                self.toggle_plan_mode,
-                path_getter,
-                checker,
-                self._approval.is_auto_approve,
-            )
-
-        # AskUserQuestion — bind afk checker for auto-dismiss.
-        # Yolo alone keeps the tool live; only afk (no user present) dismisses.
-        from kimi_cli.tools.ask_user import AskUserQuestion
-
-        ask_tool = self._agent.toolset.find("AskUserQuestion")
-        if isinstance(ask_tool, AskUserQuestion):
-            ask_tool.bind_afk(self._approval.is_afk)
-
-    def _ensure_plan_session_id(self) -> None:
-        """Allocate a stable plan session ID on first activation."""
-        if self._plan_session_id is None:
-            import uuid
-
-            self._plan_session_id = uuid.uuid4().hex
-            self._runtime.session.state.plan_session_id = self._plan_session_id
-            # Compute and persist slug immediately so the path survives process restarts
-            from kimi_cli.tools.plan.heroes import get_or_create_slug
-
-            slug = get_or_create_slug(self._plan_session_id)
-            self._runtime.session.state.plan_slug = slug
-            self._runtime.session.save_state()
-
-    def _set_plan_mode(self, enabled: bool, *, source: Literal["manual", "tool"]) -> bool:
-        """Update plan mode state for either manual or tool-driven toggles."""
-        if enabled == self._plan_mode:
-            return self._plan_mode
-        self._plan_mode = enabled
-        if enabled:
-            self._ensure_plan_session_id()
-            self._pending_plan_activation_injection = source == "manual"
-        else:
-            self._pending_plan_activation_injection = False
-            self._plan_session_id = None
-            self._runtime.session.state.plan_session_id = None
-            self._runtime.session.state.plan_slug = None
-        # Persist plan mode to session state so it survives process restarts
-        self._runtime.session.state.plan_mode = self._plan_mode
-        self._runtime.session.save_state()
-        return self._plan_mode
-
-    def get_plan_file_path(self) -> Path | None:
-        """Get the plan file path for the current session."""
-        if self._plan_session_id is None:
-            return None
-        from kimi_cli.tools.plan.heroes import get_plan_file_path
-
-        return get_plan_file_path(self._plan_session_id)
-
-    def read_current_plan(self) -> str | None:
-        """Read the current plan file content."""
-        if self._plan_session_id is None:
-            return None
-        from kimi_cli.tools.plan.heroes import read_plan_file
-
-        return read_plan_file(self._plan_session_id)
-
-    def clear_current_plan(self) -> None:
-        """Delete the current plan file."""
-        path = self.get_plan_file_path()
-        if path and path.exists():
-            path.unlink()
-
-    async def toggle_plan_mode(self) -> bool:
-        """Toggle plan mode on/off. Returns the new state.
-
-        Tools are not hidden/unhidden — instead, each tool checks plan mode
-        state at call time and rejects if blocked.
-        Periodic reminders are handled by the dynamic injection system.
-        """
-        return self._set_plan_mode(not self._plan_mode, source="tool")
-
-    async def toggle_plan_mode_from_manual(self) -> bool:
-        """Toggle plan mode from UI/manual entry points (slash command, keybinding)."""
-        return self._set_plan_mode(not self._plan_mode, source="manual")
-
-    async def set_plan_mode_from_manual(self, enabled: bool) -> bool:
-        """Set plan mode to a specific state from UI/manual entry points.
-
-        Unlike toggle, this accepts the desired state directly, avoiding
-        race conditions when the caller already knows the target value.
-        """
-        return self._set_plan_mode(enabled, source="manual")
-
-    def schedule_plan_activation_reminder(self) -> None:
-        """Schedule a plan-mode activation reminder for the next turn.
-
-        Use this when plan mode is already active (e.g. restored session with
-        ``--plan`` flag) and ``_set_plan_mode`` would early-return because the
-        state hasn't actually changed.
-        """
-        if self._plan_mode:
-            self._pending_plan_activation_injection = True
-
-    def consume_pending_plan_activation_injection(self) -> bool:
-        """Consume the next-step activation reminder scheduled by a manual toggle."""
-        if not self._plan_mode or not self._pending_plan_activation_injection:
-            return False
-        self._pending_plan_activation_injection = False
-        return True
-
     @property
     def thinking(self) -> bool | None:
         """Whether thinking mode is enabled."""
@@ -697,7 +538,6 @@ class KimiSoul:
             context_usage=self._context_usage,
             yolo_enabled=self._approval.is_yolo_flag(),
             afk_enabled=self._approval.is_afk(),
-            plan_mode=self._plan_mode,
             context_tokens=token_count,
             max_context_tokens=max_size,
             mcp_status=self._mcp_status_snapshot(),
@@ -1324,7 +1164,7 @@ class KimiSoul:
             output_tokens=usage.output if usage else "?",
         )
         status_update = StatusUpdate(
-            token_usage=usage, message_id=result.id, plan_mode=self._plan_mode
+            token_usage=usage, message_id=result.id
         )
         if usage is not None:
             # mark the token count for the context before the step
@@ -1339,18 +1179,12 @@ class KimiSoul:
         # 2e.6. TOOL EXECUTION
         # ═══════════════════════════════════════════════════════════════════════
         # wait for all tool results (may be interrupted)
-        plan_mode_before_tools = self._plan_mode
         results = await result.tool_results()
         logger.debug("Got tool results: {results}", results=results)
 
         # Update dedup tracking for the next step
         if isinstance(self._agent.toolset, KimiToolset):
             self._last_tool_calls = self._agent.toolset.end_step()
-
-        # If a tool (EnterPlanMode/ExitPlanMode) changed plan mode during execution,
-        # send a corrected StatusUpdate so the client sees the up-to-date state.
-        if self._plan_mode != plan_mode_before_tools:
-            wire_send(StatusUpdate(plan_mode=self._plan_mode))
 
         # ═══════════════════════════════════════════════════════════════════════
         # 2e.7. CONTEXT GROWTH

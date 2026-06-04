@@ -14,8 +14,6 @@ kimi --agent okabe
 
 默认 Agent，适合通常情况使用。启用的工具：
 
-`Agent`、`AskUserQuestion`、`SetTodoList`、`Shell`、`ReadFile`、`ReadMediaFile`、`Glob`、`Grep`、`WriteFile`、`EditFile`、`SearchWeb`、`FetchURL`、`EnterPlanMode`、`ExitPlanMode`、`TaskList`、`TaskOutput`、`TaskStop`
-
 ### `okabe`
 
 实验性 Agent，用于实验新的提示词和工具。在 `default` 的基础上额外启用 `SendDMail`。
@@ -329,16 +327,8 @@ agent:
 | `message` | string | 要发送的消息 |
 | `checkpoint_id` | int | 要发送回的检查点 ID（>= 0） |
 
-### `EnterPlanMode`
-
-- **路径**：`kimi_cli.tools.plan.enter:EnterPlanMode`
-- **描述**：请求进入 Plan 模式。调用后通常会向用户展示审批请求；如果会话处于 YOLO 或 AFK 模式则会自动批准进入。YOLO 只自动批准进入 Plan 模式，`ExitPlanMode` 仍会把最终方案展示给用户审批。仅在用户明确要求规划或存在重大架构歧义时使用。详见 [Plan 模式](../guides/interaction.md#plan-模式)。
-
 此工具不接受参数。
 
-### `ExitPlanMode`
-
-- **路径**：`kimi_cli.tools.plan:ExitPlanMode`
 - **描述**：在 Plan 模式下完成方案后提交审批。调用前需先将方案写入 plan 文件，此工具会读取 plan 文件内容并展示给用户审批。用户可以选择某个实施路径（退出 Plan 模式并开始执行）、拒绝（保持 Plan 模式等待反馈）或提供修改意见。详见 [Plan 模式](../guides/interaction.md#plan-模式)。
 
 | 参数 | 类型 | 说明 |
@@ -375,7 +365,6 @@ agent:
 |------|------|------|
 | `task_id` | string | 要停止的任务 ID |
 | `reason` | string | 停止原因（可选），默认 "Stopped by TaskStop" |
-
 
 ## 工具安全边界
 

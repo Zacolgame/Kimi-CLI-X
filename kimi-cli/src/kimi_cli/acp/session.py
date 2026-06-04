@@ -29,7 +29,6 @@ from kimi_cli.wire.types import (
     MCPLoadingBegin,
     MCPLoadingEnd,
     Notification,
-    PlanDisplay,
     QuestionRequest,
     StatusUpdate,
     SteerInput,
@@ -202,8 +201,6 @@ class ACPSession:
                         pass
                     case SubagentEvent():
                         pass
-                    case PlanDisplay():
-                        pass
                     case ApprovalRequest():
                         await self._handle_approval_request(msg)
                     case ToolCallRequest():
@@ -299,8 +296,6 @@ class ACPSession:
                     case ToolResult():
                         if self._turn_state is not None:
                             await self._send_tool_result(wire_msg)
-                    case PlanDisplay():
-                        pass
                     case ApprovalResponse() | SubagentEvent():
                         pass
                     case ApprovalRequest() | ToolCallRequest() | QuestionRequest():

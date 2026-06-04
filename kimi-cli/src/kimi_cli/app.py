@@ -131,7 +131,6 @@ class KimiCLI:
         yolo: bool = False,
         afk: bool = False,
         runtime_afk: bool = False,
-        plan_mode: bool = False,
         resumed: bool = False,
         # Extensions
         agent_file: Path | None = None,
@@ -229,10 +228,6 @@ class KimiCLI:
         # determine yolo mode
         yolo = yolo if yolo else config.default_yolo
 
-        # determine plan mode (only for new sessions, not restored)
-        if not resumed:
-            plan_mode = plan_mode if plan_mode else config.default_plan_mode
-
         if llm is None:
             llm = create_llm(
                 provider,
@@ -310,13 +305,6 @@ class KimiCLI:
             await context.write_system_prompt(agent.get_system_prompt())
 
         soul = KimiSoul(agent, context=context)
-
-        # Activate plan mode if requested (for new sessions or --plan flag)
-        if plan_mode and not soul.plan_mode:
-            await soul.set_plan_mode_from_manual(True)
-        elif plan_mode and soul.plan_mode:
-            # Already in plan mode from restored session, trigger activation reminder
-            soul.schedule_plan_activation_reminder()
 
         # Create and inject hook engine
         from kimi_cli.hooks.engine import HookEngine

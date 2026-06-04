@@ -8,15 +8,6 @@ from kimi_agent_sdk import Config
 from . import _globals
 
 
-def _ensure_text_search() -> tuple[Any, Any]:
-    """Lazy import of TextSearchIndex and SearchResult."""
-    if _globals.TextSearchIndex is None:
-        from kimix.tools.skill.faiss.text_search import TextSearchIndex as _TSI, SearchResult as _SR
-        _globals.TextSearchIndex = _TSI
-        _globals.SearchResult = _SR
-    return _globals.TextSearchIndex, _globals.SearchResult
-
-
 def _create_config(provider_dict: dict[str, Any] | None = None) -> tuple[Config, dict[str, Any] | None]:
     from kimi_cli.config import LLMModel, LLMProvider
     from kimix.base import print_debug, print_warning

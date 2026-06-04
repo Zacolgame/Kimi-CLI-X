@@ -19,7 +19,6 @@ from kimi_cli.wire.types import (
     MCPServerSnapshot,
     MCPStatusSnapshot,
     Notification,
-    PlanDisplay,
     QuestionItem,
     QuestionOption,
     QuestionRequest,
@@ -173,7 +172,6 @@ async def test_wire_message_serde():
                 "max_context_tokens": None,
                 "token_usage": None,
                 "message_id": None,
-                "plan_mode": None,
                 "mcp_status": {
                     "loading": True,
                     "connected": 0,
@@ -218,21 +216,6 @@ async def test_wire_message_serde():
                 "severity": "success",
                 "created_at": 123.456,
                 "payload": {"task_id": "b1234567"},
-            },
-        }
-    )
-    _test_serde(msg)
-
-    msg = PlanDisplay(
-        content="## Plan\n\n1. Step one\n2. Step two",
-        file_path="/Users/test/.kimi/plans/iron-man-spider-man.md",
-    )
-    assert serialize_wire_message(msg) == snapshot(
-        {
-            "type": "PlanDisplay",
-            "payload": {
-                "content": "## Plan\n\n1. Step one\n2. Step two",
-                "file_path": "/Users/test/.kimi/plans/iron-man-spider-man.md",
             },
         }
     )

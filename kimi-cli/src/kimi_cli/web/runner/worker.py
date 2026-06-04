@@ -45,8 +45,6 @@ async def run_worker(session_id: UUID) -> None:
                 path=default_mcp_file,
             )
 
-    # Detect whether this is a resumed session (has prior state on disk)
-    # vs a brand-new session that should honor config.default_plan_mode.
     resumed = (session.dir / "state.json").exists()
 
     # Create KimiCLI instance with MCP configuration

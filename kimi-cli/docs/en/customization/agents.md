@@ -14,8 +14,6 @@ kimi --agent okabe
 
 The default agent, suitable for general use. Enabled tools:
 
-`Agent`, `AskUserQuestion`, `SetTodoList`, `Shell`, `ReadFile`, `ReadMediaFile`, `Glob`, `Grep`, `WriteFile`, `EditFile`, `SearchWeb`, `FetchURL`, `EnterPlanMode`, `ExitPlanMode`, `TaskList`, `TaskOutput`, `TaskStop`
-
 ### `okabe`
 
 An experimental agent for testing new prompts and tools. Adds `SendDMail` on top of `default`.
@@ -329,17 +327,7 @@ When `run_in_background=true`, the command is launched as a background task and 
 | `message` | string | Message to send |
 | `checkpoint_id` | int | Checkpoint ID to send back to (>= 0) |
 
-### `EnterPlanMode`
-
-- **Path**: `kimi_cli.tools.plan.enter:EnterPlanMode`
-- **Description**: Request to enter plan mode. After calling, an approval request is presented to the user unless the session is in YOLO or AFK mode; YOLO auto-approves entering plan mode, but `ExitPlanMode` still presents the final plan for user approval. Use this only when the user explicitly requests planning or when there is significant architectural ambiguity. See [Plan mode](../guides/interaction.md#plan-mode).
-
 This tool takes no parameters.
-
-### `ExitPlanMode`
-
-- **Path**: `kimi_cli.tools.plan:ExitPlanMode`
-- **Description**: Submit a plan for user approval while in plan mode. Before calling, the plan must be written to the plan file. This tool reads the plan file content and presents it to the user for approval. The user can select an implementation path (exit plan mode and start execution), reject (stay in plan mode and wait for feedback), or provide revision comments. See [Plan mode](../guides/interaction.md#plan-mode).
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -369,13 +357,11 @@ This tool takes no parameters.
 ### `TaskStop`
 
 - **Path**: `kimi_cli.tools.background:TaskStop`
-- **Description**: Stop a running background task. Requires user approval. Use only when a task must be cancelled; for normal completion, wait for the automatic notification. Not available in plan mode.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `task_id` | string | Task ID to stop |
 | `reason` | string | Reason for stopping (optional), default "Stopped by TaskStop" |
-
 
 ## Tool security boundaries
 

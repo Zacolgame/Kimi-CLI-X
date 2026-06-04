@@ -25,45 +25,14 @@ Shell mode also supports some slash commands, including `/help`, `/exit`, `/vers
 In shell mode, each command executes independently. Commands that change the environment like `cd` or `export` won't affect subsequent commands.
 :::
 
-## Plan mode
-
-Plan mode is a read-only planning mode that lets the AI design an implementation plan before writing code, preventing wasted effort in the wrong direction.
-
-In plan mode, the AI can only use read-only tools (`Glob`, `Grep`, `ReadFile`) to explore the codebase — it cannot modify any files or execute commands. The AI writes its plan to a dedicated plan file, then submits it to you for approval. You can approve, reject, or provide revision feedback.
-
-### Entering plan mode
-
-There are four ways to enter plan mode:
-
-- **CLI flag**: Use `kimi --plan` to start a new session directly in plan mode
-- **Keyboard shortcut**: Press `Shift-Tab` to toggle plan mode
 - **Slash command**: Enter `/plan` or `/plan on`
-- **AI-initiated**: When facing complex tasks, the AI may request to enter plan mode via the `EnterPlanMode` tool — you can accept or decline
-
-You can also set `default_plan_mode = true` in the config file to start every new session in plan mode by default. See [Configuration files](../configuration/config-files.md).
-
-In YOLO mode, AI-initiated entry into plan mode is auto-approved, but exiting plan mode with `ExitPlanMode` still asks you to approve the plan. In AFK mode, both entering and exiting plan mode are auto-approved because no user is present.
-
-When plan mode is active, the prompt changes to `📋` and a blue `plan` badge appears in the status bar.
 
 ### Reviewing plans
 
-When the AI finishes its plan, it submits it for approval via `ExitPlanMode`. The approval panel shows the full plan content, and you can:
-
-- **Approve / select an approach**: If the plan contains multiple alternative implementation paths, the AI lists 2–3 labeled options (e.g. "Option A", "Option B (Recommended)") for you to choose from — selecting one exits plan mode and tells the AI which path to follow. If the plan has a single path, an **Approve** button is shown instead.
-- **Reject**: Decline the plan, stay in plan mode, and provide feedback via conversation
-- **Reject and Exit**: Decline the plan and exit plan mode in one step
 - **Revise**: Enter revision notes — the AI will update the plan and resubmit
 
 Press `Ctrl-E` to view the full plan content in a fullscreen pager.
 
-### Managing plan mode
-
-Use the `/plan` command to manage plan mode:
-
-- `/plan`: Toggle plan mode
-- `/plan on`: Enable plan mode
-- `/plan off`: Disable plan mode
 - `/plan view`: View the current plan content
 - `/plan clear`: Clear the current plan file
 

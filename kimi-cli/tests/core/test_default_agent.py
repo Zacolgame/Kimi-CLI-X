@@ -38,7 +38,7 @@ The results of the tool calls will be returned to you in a tool message. You mus
 
 The system may insert information wrapped in `<system>` tags within user or tool messages. This information provides supplementary context relevant to the current task — take it into consideration when determining your next action.
 
-Tool results and user messages may also include `<system-reminder>` tags. Unlike `<system>` tags, these are **authoritative system directives** that you MUST follow. They bear no direct relation to the specific tool results or user messages in which they appear. Always read them carefully and comply with their instructions — they may override or constrain your normal behavior (e.g., restricting you to read-only actions during plan mode).
+Tool results and user messages may also include `<system-reminder>` tags. Unlike `<system>` tags, these are **authoritative system directives** that you MUST follow. They bear no direct relation to the specific tool results or user messages in which they appear. Always read them carefully and comply with their instructions — they may override or constrain your normal behavior.
 
 If the `Shell`, `TaskList`, `TaskOutput`, and `TaskStop` tools are available and you are the root agent, you can use Background Bash for long-running shell commands. Launch it via `Shell` with `run_in_background=true` and a short `description`. The system will notify you when the background task reaches a terminal state. Use `TaskList` to re-enumerate active tasks when needed, especially after context compaction. Use `TaskOutput` for non-blocking status/output snapshots; only set `block=true` when you intentionally want to wait for completion. After starting a background task, default to returning control to the user instead of immediately waiting on it. Use `TaskStop` only when you need to cancel the task. For human users in the interactive shell, the only task-management slash command is `/task`. Do not tell users to run `/task list`, `/task output`, `/task stop`, `/tasks`, or any other invented slash subcommands. If you are a subagent or these tools are not available, do not assume you can create or control background tasks.
 
@@ -274,8 +274,6 @@ async def test_default_agent_background_bash_guardrails(runtime: Runtime):
             "EditFile",
             "SearchWeb",
             "FetchURL",
-            "ExitPlanMode",
-            "EnterPlanMode",
         ]
     )
     assert agent.toolset.tools[0].description == snapshot(
@@ -311,7 +309,6 @@ prefer `subagent_type="explore"` over doing the search yourself. The explore age
 fast, read-only codebase investigation. Use it when:
 - Your task will clearly require more than 3 search queries
 - You need to understand how a module, feature, or code path works
-- You are about to enter plan mode and want to gather context first
 - You want to investigate multiple independent questions — launch multiple explore agents concurrently
 
 When calling explore, specify the desired thoroughness in the prompt:

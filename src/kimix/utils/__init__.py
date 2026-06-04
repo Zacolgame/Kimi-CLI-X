@@ -4,7 +4,7 @@ from ._globals import (
     _default_session,
     _should_print_usage,
 )
-from .config import _create_config, _ensure_text_search
+from .config import _create_config
 from .system_prompt import _SYSTEM_PROMP, get_system_prompt, SystemPromptType
 from .session import (
     context_path,
@@ -37,7 +37,6 @@ __all__ = [
     "_default_session",
     "_should_print_usage",
     "_create_config",
-    "_ensure_text_search",
     "_SYSTEM_PROMP",
     "get_system_prompt",
     "context_path",

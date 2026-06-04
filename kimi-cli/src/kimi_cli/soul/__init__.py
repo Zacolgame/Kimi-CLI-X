@@ -90,8 +90,6 @@ class StatusSnapshot:
     """Whether the explicit YOLO (auto-approve) flag is on. Independent of afk."""
     afk_enabled: bool = False
     """Whether afk (away-from-keyboard) mode is active. Implies auto-approve."""
-    plan_mode: bool = False
-    """Whether plan mode (read-only research and planning) is active."""
     context_tokens: int = 0
     """The number of tokens currently in the context."""
     max_context_tokens: int = 0

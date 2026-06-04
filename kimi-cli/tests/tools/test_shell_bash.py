@@ -217,16 +217,6 @@ async def test_timeout_parameter_validation_bounds(shell_tool: Shell):
     assert params.timeout == MAX_FOREGROUND_TIMEOUT + 1
 
 
-async def test_shell_works_in_plan_mode(shell_tool: Shell, runtime):
-    """Shell should still work in plan mode — plan mode constraints are enforced by
-    the dynamic injection prompt, not by hard-blocking the tool."""
-    runtime.session.state.plan_mode = True
-
-    result = await shell_tool(Params(command="echo plan_ok"))
-
-    assert not result.is_error
-    assert "plan_ok" in result.output
-
 
 def test_shell_args_always_use_dash_c(shell_tool: Shell):
     """After dropping PowerShell, the shell exec form is always (path, -c, command)."""
