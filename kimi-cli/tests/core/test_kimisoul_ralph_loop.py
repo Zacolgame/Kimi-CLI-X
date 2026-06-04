@@ -24,6 +24,9 @@ from kimi_cli.utils.aioqueue import QueueShutDown
 from kimi_cli.wire import Wire
 from kimi_cli.wire.types import TurnBegin
 
+from kosong import Message
+from kosong import ToolCall
+
 
 @pytest.fixture
 def approval() -> Approval:
@@ -212,22 +215,20 @@ async def test_ralph_loop_replays_original_prompt(runtime: Runtime, tmp_path: Pa
     expect_snapshot(
         context.history,
         snapshot(
-            [
-                Message(
-                    role="user",
-                    content=[
-                        TextPart(text="Check this image"),
-                        ImageURLPart(
-                            image_url=ImageURLPart.ImageURL(url="https://example.com/test.png")
-                        ),
-                    ],
-                ),
-                Message(role="assistant", content=[TextPart(text="first")]),
-                Message(
-                    role="user",
-                    content=[
-                        TextPart(
-                            text="""\
+            (
+    Message(
+        role="user",
+        content=[
+            TextPart(text="Check this image"),
+            ImageURLPart(
+                image_url=ImageURLPart.ImageURL(url="https://example.com/test.png")
+            ),
+        ],
+    ),
+    Message(role="assistant", content=[TextPart(text="first")]),
+    Message(
+        role="user",
+        content=[TextPart(text="""\
 Check this image. (Automated loop — choose STOP only when fully complete. If unsure, choose CONTINUE.)
 
 Available branches:
@@ -235,18 +236,14 @@ Available branches:
 - STOP
 
 Reply with a choice using <choice>...</choice>.\
-"""  # noqa: E501
-                        ),
-                    ],
-                ),
-                Message(
-                    role="assistant", content=[TextPart(text="second <choice>CONTINUE</choice>")]
-                ),
-                Message(
-                    role="user",
-                    content=[
-                        TextPart(
-                            text="""\
+""")],
+    ),
+    Message(
+        role="assistant", content=[TextPart(text="second <choice>CONTINUE</choice>")]
+    ),
+    Message(
+        role="user",
+        content=[TextPart(text="""\
 Check this image. (Automated loop — choose STOP only when fully complete. If unsure, choose CONTINUE.)
 
 Available branches:
@@ -254,12 +251,10 @@ Available branches:
 - STOP
 
 Reply with a choice using <choice>...</choice>.\
-"""  # noqa: E501
-                        ),
-                    ],
-                ),
-                Message(role="assistant", content=[TextPart(text="third <choice>STOP</choice>")]),
-            ]
+""")],
+    ),
+    Message(role="assistant", content=[TextPart(text="third <choice>STOP</choice>")]),
+)
         ),
     )
 
@@ -283,19 +278,12 @@ async def test_ralph_loop_stops_on_choice(runtime: Runtime, tmp_path: Path) -> N
     expect_snapshot(
         context.history,
         snapshot(
-            [
-                Message(
-                    role="user",
-                    content=[
-                        TextPart(text="do it"),
-                    ],
-                ),
-                Message(role="assistant", content=[TextPart(text="first")]),
-                Message(
-                    role="user",
-                    content=[
-                        TextPart(
-                            text="""\
+            (
+    Message(role="user", content=[TextPart(text="do it")]),
+    Message(role="assistant", content=[TextPart(text="first")]),
+    Message(
+        role="user",
+        content=[TextPart(text="""\
 do it. (Automated loop — choose STOP only when fully complete. If unsure, choose CONTINUE.)
 
 Available branches:
@@ -303,12 +291,10 @@ Available branches:
 - STOP
 
 Reply with a choice using <choice>...</choice>.\
-"""  # noqa: E501
-                        ),
-                    ],
-                ),
-                Message(role="assistant", content=[TextPart(text="done <choice>STOP</choice>")]),
-            ]
+""")],
+    ),
+    Message(role="assistant", content=[TextPart(text="done <choice>STOP</choice>")]),
+)
         ),
     )
 
@@ -336,35 +322,28 @@ async def test_ralph_loop_stops_on_tool_rejected(runtime: Runtime, tmp_path: Pat
     expect_snapshot(
         context.history,
         snapshot(
-            [
-                Message(
-                    role="user",
-                    content=[
-                        TextPart(text="do it"),
-                    ],
-                ),
-                Message(
-                    role="assistant",
-                    content=[],
-                    tool_calls=[
-                        ToolCall(
-                            id="call-1",
-                            function=ToolCall.FunctionBody(name="reject_tool", arguments="{}"),
-                        )
-                    ],
-                ),
-                Message(
-                    role="tool",
-                    content=[
-                        TextPart(
-                            text=(
-                                "<system>ERROR: Tool call rejected by user. Stop and wait for instructions.</system>"
-                            )
-                        )
-                    ],
-                    tool_call_id="call-1",
-                ),
-            ]
+            (
+    Message(role="user", content=[TextPart(text="do it")]),
+    Message(
+        role="assistant",
+        content=[],
+        tool_calls=[
+            ToolCall(
+                id="call-1",
+                function=ToolCall.FunctionBody(name="reject_tool", arguments="{}"),
+            )
+        ],
+    ),
+    Message(
+        role="tool",
+        content=[
+            TextPart(
+                text="<system>ERROR: Tool call rejected by user. Stop and wait for instructions.</system>"
+            )
+        ],
+        tool_call_id="call-1",
+    ),
+)
         ),
     )
 
@@ -382,9 +361,9 @@ async def test_ralph_loop_disabled_skips_loop_prompt(runtime: Runtime, tmp_path:
     expect_snapshot(
         context.history,
         snapshot(
-            [
-                Message(role="user", content=[TextPart(text="hello")]),
-                Message(role="assistant", content=[TextPart(text="done")]),
-            ]
+            (
+    Message(role="user", content=[TextPart(text="hello")]),
+    Message(role="assistant", content=[TextPart(text="done")]),
+)
         ),
     )
