@@ -260,6 +260,7 @@ FIELD_ALIASES_GENERAL: dict[str, str] = {
     # action / operation
     "operation": "action",
     "op": "action",
+    "verb": "action",
     # brief
     "short": "brief",
     # status / state
@@ -379,6 +380,16 @@ FIELD_ALIASES_FILE: dict[str, str] = {
     "number": "line_number",
     # ignore_case (Grep) - reciprocal
     "case_insensitive": "ignore_case",
+    # before_context / after_context / context (Grep -B/-A/-C)
+    "before": "before_context",
+    "after": "after_context",
+    "around": "context",
+    # include_content (Search web)
+    "include": "include_content",
+    "show_content": "include_content",
+    "with_content": "include_content",
+    # dest_path (Search/Skill)
+    "destination_path": "dest_path",
 }
 
 FIELD_ALIASES_SHELL: dict[str, str] = {
@@ -493,6 +504,23 @@ FIELD_ALIASES_ACTIVE: dict[str, str] = {
 FIELD_ALIASES_SUBAGENT: dict[str, str] = {
     # subagent_type
     "agent_type": "subagent_type",
+    # session_id
+    "session": "session_id",
+    "sid": "session_id",
+    # close_session
+    "close": "close_session",
+    "end": "close_session",
+    "end_session": "close_session",
+    "finish": "close_session",
+    "done": "close_session",
+    # return_history
+    "history": "return_history",
+    "full_history": "return_history",
+    # response
+    "reply": "response",
+    "answer": "response",
+    # context (AskParentParams)
+    "ctx": "context",
 }
 
 # Merge all categories into the common set for backward compatibility.
