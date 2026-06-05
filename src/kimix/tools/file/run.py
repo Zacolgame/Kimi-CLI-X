@@ -404,10 +404,12 @@ class Run(CallableTool2[RunParams]):
         os.environ['PYTHONIOENCODING'] = 'utf-8'
         super().__init__()
         if USE_SYSTEM_SHELL:
-            if find_bash() is not None:
-                raise SkipThisTool()
-            if find_pwsh():
-                raise SkipThisTool()
+            if sys.platform == "win32":
+                if find_pwsh():
+                    raise SkipThisTool()
+            else:
+                if find_bash() is not None:
+                    raise SkipThisTool()
         self._session = session
         self._semaphore = asyncio.Semaphore(8)
         self.use_posix = sys.platform != "win32"
