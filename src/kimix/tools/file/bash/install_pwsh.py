@@ -21,9 +21,6 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-# Re-use helpers from install_git to avoid duplication.
-from kimix.tools.file.bash.install_git import _download_file, _ensure_in_user_path
-
 # ============================================================
 # Global configuration
 # ============================================================
@@ -48,6 +45,50 @@ def _is_windows() -> bool:
 def _run(cmd: list[str], timeout: int = 600) -> subprocess.CompletedProcess[str]:
     """Run a subprocess and return the result (stdout/stderr captured as text)."""
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def _download_file(url: str, dest: Path) -> None:
+    """Download *url* to *dest*, with a progress indicator."""
+    import urllib.request
+
+    def _report(block_num: int, block_size: int, total_size: int) -> None:
+        if total_size > 0:
+            pct = min(100, int(block_num * block_size * 100 / total_size))
+            sys.stdout.write(f"\r  {pct}%")
+            sys.stdout.flush()
+
+    urllib.request.urlretrieve(url, str(dest), _report)
+    print()  # newline after progress
+
+
+def _ensure_in_user_path(dirpath: str) -> None:
+    """Add *dirpath* to the current user's PATH environment variable (persistent)."""
+    import winreg
+
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Environment",
+            0,
+            winreg.KEY_READ | winreg.KEY_WRITE,
+        )
+    except FileNotFoundError:
+        return
+
+    try:
+        path_val, _ = winreg.QueryValueEx(key, "Path")
+    except FileNotFoundError:
+        path_val = ""
+
+    entries = [p.strip() for p in path_val.split(";") if p.strip()]
+    if dirpath in entries:
+        winreg.CloseKey(key)
+        return
+
+    entries.append(dirpath)
+    new_path = ";".join(entries)
+    winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path)
+    winreg.CloseKey(key)
 
 
 def _pwsh_found(install_dir: str | None = None) -> bool:
