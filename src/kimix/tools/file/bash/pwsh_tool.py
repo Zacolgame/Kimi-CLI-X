@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 class PowershellParams(BaseModel):
     """Parameters for the Powershell tool — execute a PowerShell command."""
 
-    cmd: str = Field(description="Simple PowerShell command.")
+    cmd: str = Field(description="PowerShell command.")
     timeout: int = Field(
         default=10,
         ge=3,
@@ -31,7 +31,7 @@ class PowershellParams(BaseModel):
 class Powershell(CallableTool2[PowershellParams]):
 
     name: str = "Powershell"
-    description: str = "Run a PowerShell command. Prefer Python for complex or stateful tasks."
+    description: str = "Run a simple PowerShell(pwsh) command. Prefer Python for complex or stateful tasks."
     params: type[PowershellParams] = PowershellParams
 
     def __init__(self, session: Session):
@@ -88,7 +88,7 @@ class Powershell(CallableTool2[PowershellParams]):
                     )
 
         # Build the command line to pass to PowerShell -Command
-        process_task = ProcessTask(self._pwsh, ["-Command", params.cmd], None, None)
+        process_task = ProcessTask(self._pwsh, ["-NoProfile", "-Command", params.cmd], None, None)
         task_id = await process_task.start(self._session, "pwsh")
 
         await process_task.wait(params.timeout)
