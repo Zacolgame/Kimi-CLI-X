@@ -123,6 +123,28 @@ class TestTaskOutput:
         assert "file_content" in out_path.read_text(encoding="utf-8")
         assert "exported to file" in str(result.output)
 
+    async def test_running_task_returns_inline_output(self, mock_session: MagicMock) -> None:
+        """A running task should return its accumulated output inline,
+        not unconditionally export it to a temporary file.
+        """
+        tool = TaskOutput(session=mock_session)
+        stream = BackgroundStream()
+
+        def worker(q: queue.Queue[str]) -> None:
+            q.put("hello_running")
+            time.sleep(10)
+
+        await stream.start(worker, stop_function=lambda: None)
+        add_task(mock_session, "run_test", stream)
+
+        result = await tool(TaskOutputParams(task_id="run_test", block=False))
+        assert "hello_running" in str(result.output)
+        assert "exported to file" not in str(result.output)
+
+        # cleanup
+        await stream.stop()
+        await stream.wait()
+
 
 # ---------------------------------------------------------------------------
 # Python tool

@@ -80,8 +80,8 @@ class Powershell(CallableTool2[PowershellParams]):
                     )
 
         # Build the command line to pass to PowerShell -Command
-        params.cmd = pwsh_transform(params.cmd)
-        process_task = ProcessTask('powershell', ["-NoProfile", "-Command", params.cmd], None, None)
+        cmd, warning = pwsh_transform(params.cmd)
+        process_task = ProcessTask('powershell', ["-NoProfile", "-Command", cmd], None, None)
         task_id = await process_task.start(self._session, "pwsh")
 
         await process_task.wait(params.timeout)
@@ -90,7 +90,7 @@ class Powershell(CallableTool2[PowershellParams]):
             output = await process_task.stream.get_output() if process_task.stream else ""
             return ToolError(
                 output=output,
-                message=f"Running in background. task_id: `{task_id}`. use `TaskOutput` or `Input`",
+                message=f"Running in background. task_id: `{task_id}`. use `TaskOutput` or `Input`\n{warning}".strip(),
                 brief="Timeout",
             )
 
@@ -100,11 +100,11 @@ class Powershell(CallableTool2[PowershellParams]):
         success = await process_task.stream.success() if process_task.stream else False
 
         if not success:
-            return ToolError(output=output, message="Command execution failed", brief="Command execution failed")
+            return ToolError(output=output, message=f"Command execution failed\n{warning}".strip(), brief="Command execution failed")
 
         output = await _maybe_export_output_async(output)
         return ToolOk(
             output=output,
-            brief="Command executed successfully",
-            display_block=ShellDisplayBlock(language="powershell", command=params.cmd),
+            brief=f"Command executed successfully\n{warning}".strip(),
+            display_block=ShellDisplayBlock(language="powershell", command=cmd),
         )

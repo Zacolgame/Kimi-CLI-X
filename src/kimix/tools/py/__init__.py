@@ -61,7 +61,7 @@ class Python(CallableTool2[Params]):
                 args = ['-c', params.code]
 
             task = ProcessTask(sys.executable, args, env=env)
-            task_id = await task.start(self._session, "python", "python")
+            task_id = await task.start(self._session, "python")
 
             if params.run_in_background:
                 return ToolOk(

@@ -113,10 +113,6 @@ class TaskOutput(CallableTool2):
                     await f.write(output)
                 display_path = str(path).replace("\\", "/")
                 output = f"{f'`{params.task_id}` is still running, call `TaskOutput` again, ' if task_alive else ''}output exported to file `{display_path}`"
-            elif output and task_alive and not await stream.success():
-                temp_path, _ = await _export_to_temp_file_async(key=None, content=output, ext='.txt')
-                display_temp_path = temp_path.replace("\\", "/")
-                output = f"Output exported to file `{display_temp_path}`"
             else:
                 output = await _maybe_export_output_async(output)
             kind = params.task_id.split("_")[0] if params.task_id else "task"

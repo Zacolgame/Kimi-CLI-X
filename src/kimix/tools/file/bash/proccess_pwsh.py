@@ -410,7 +410,7 @@ def _transform_null_conditional_bracket_line(line: str) -> str:
         pos = 0
         matched = False
         while True:
-            idx = line.find("?[")
+            idx = line.find("?[", pos)
             if idx == -1:
                 break
             if _depth_at(line, idx, depth_arr) != 0 or not _outside_line_regions(regions, idx):
@@ -447,8 +447,25 @@ def _transform_null_conditional_bracket_line(line: str) -> str:
         if not matched:
             break
     return line
-def pwsh_transform(code: str) -> str:
+def _has_chain_operators(code: str) -> bool:
+    """Check if code contains && or || outside string/comment regions."""
+    regions = _find_string_regions(code)
+    for op in ("&&", "||"):
+        pos = 0
+        while True:
+            idx = code.find(op, pos)
+            if idx == -1:
+                break
+            if not any(start <= idx < end for start, end in regions):
+                return True
+            pos = idx + 2
+    return False
+
+
+
+def pwsh_transform(code: str, *, warn_chain: bool = False) -> tuple[str, str]:
     """Transform PowerShell 7.x syntax to PowerShell 5.1 compatible syntax."""
+    has_chain = _has_chain_operators(code) if warn_chain else False
     code = _join_continuation_lines(code)
     lines = code.split("\n")
     regions = _find_string_regions(code)
@@ -468,7 +485,15 @@ def pwsh_transform(code: str) -> str:
         line = _transform_null_conditional_dot_line(line)
         line = _transform_null_conditional_bracket_line(line)
         result.append(line)
-    return "\n".join(result)
+    result_code = "\n".join(result)
+    warning = ''
+    if has_chain:
+        warning = (
+            "WARNING: PowerShell `&&` and `||` check the `$?` automatic variable "
+            "(success of last native command), NOT the raw exit code like bash. "
+        )
+    return result_code, warning
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1:

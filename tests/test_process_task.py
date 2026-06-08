@@ -325,3 +325,39 @@ async def test_run_process_bg_with_cwd(tmp_path: Path) -> None:
         except queue.Empty:
             break
     assert str(tmp_path) in output
+
+
+async def test_run_process_bg_decoder_flush_on_stop() -> None:
+    """Stopping a task must flush the incremental UTF-8 decoder so that
+    trailing incomplete multi-byte sequences are not silently lost.
+    """
+    # Write exactly 4095 ASCII bytes + the first byte of a 3-byte UTF-8 char.
+    # The reader will decode the ASCII and buffer the trailing byte.
+    # When stopped, the finally block must flush it (as a replacement char).
+    code = (
+        "import sys, time\n"
+        "sys.stdout.buffer.write(b'A' * 4095 + b'\\xe3')\n"
+        "sys.stdout.buffer.flush()\n"
+        "time.sleep(10)\n"
+    )
+    task = ProcessTask(sys.executable, ["-c", code])
+    q: queue.Queue[str] = queue.Queue()
+
+    bg = asyncio.create_task(task._run_process_bg(q))
+    await asyncio.sleep(0.3)
+    await task._stop_function()
+    result = await asyncio.wait_for(bg, timeout=5)
+
+    assert result is False
+    output = ""
+    while True:
+        try:
+            output += q.get_nowait()
+        except queue.Empty:
+            break
+
+    # The 4095 'A' characters must be present.
+    assert output.count("A") == 4095
+    # The buffered byte must have been flushed (as replacement char) rather
+    # than silently discarded.
+    assert "\ufffd" in output

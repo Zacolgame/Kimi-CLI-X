@@ -283,8 +283,8 @@ class ProcessTask:
                 raise RuntimeError("Subprocess stdout is None")
 
             async def read_stdout() -> None:
+                decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
                 try:
-                    decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
                     while True:
                         if self._stop_event.is_set():
                             break
@@ -302,14 +302,20 @@ class ProcessTask:
                                 q.put_nowait(text)
                                 output_buffer.write(text)
                             break
-                except (IOError, OSError, ValueError, asyncio.CancelledError):
+                except (IOError, OSError, ValueError):
                     pass
+                finally:
+                    text = decoder.decode(b'', final=True)
+                    if text:
+                        text = filter_output(text)
+                        q.put_nowait(text)
+                        output_buffer.write(text)
 
             async def read_stderr() -> None:
                 if process.stderr is None:
                     return
+                decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
                 try:
-                    decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
                     while True:
                         if self._stop_event.is_set():
                             break
@@ -329,8 +335,15 @@ class ProcessTask:
                                 q.put_nowait(msg)
                                 output_buffer.write(msg)
                             break
-                except (IOError, OSError, ValueError, asyncio.CancelledError):
+                except (IOError, OSError, ValueError):
                     pass
+                finally:
+                    text = decoder.decode(b'', final=True)
+                    if text:
+                        text = filter_output(text)
+                        msg = "[stderr] " + text
+                        q.put_nowait(msg)
+                        output_buffer.write(msg)
 
             async def write_stdin() -> None:
                 try:
