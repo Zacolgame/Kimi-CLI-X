@@ -29,6 +29,14 @@ def _find_string_regions(code: str) -> list[tuple[int, int]]:
                 i += 1
             regions.append((start, i))
         elif c == "@" and i + 1 < n and code[i + 1] in ("'", '"'):
+            # Here-string start must be at end of line (only whitespace after)
+            j = i + 2
+            while j < n and code[j] in " \t\r":
+                j += 1
+            if j < n and code[j] != "\n":
+                # Not a real here-string start; skip the @ and let normal parsing continue
+                i += 1
+                continue
             start = i
             quote_char = code[i + 1]
             i += 2
@@ -69,6 +77,7 @@ def _find_string_regions(code: str) -> list[tuple[int, int]]:
         else:
             i += 1
     return regions
+
 def _skip_subexpression(code: str, start: int) -> int:
     assert code[start] == "$"
     i = start + 2
@@ -104,6 +113,7 @@ def _skip_subexpression(code: str, start: int) -> int:
         else:
             i += 1
     return i
+
 def _find_line_regions(line: str) -> list[tuple[int, int]]:
     regions: list[tuple[int, int]] = []
     i = 0
@@ -143,8 +153,10 @@ def _find_line_regions(line: str) -> list[tuple[int, int]]:
         else:
             i += 1
     return regions
+
 def _outside_line_regions(regions: list[tuple[int, int]], pos: int) -> bool:
     return not any(start <= pos < end for start, end in regions)
+
 def _compute_depth_array(line: str) -> list[int]:
     depths: list[int] = []
     depth = 0
@@ -156,6 +168,7 @@ def _compute_depth_array(line: str) -> list[int]:
             depth -= 1
     depths.append(depth)
     return depths
+
 def _depth_at(line: str, pos: int, depth_array: list[int] | None = None) -> int:
     if depth_array is not None:
         return depth_array[pos] if pos < len(depth_array) else 0
@@ -167,15 +180,37 @@ def _depth_at(line: str, pos: int, depth_array: list[int] | None = None) -> int:
         elif c in ")]}":
             depth -= 1
     return depth
-_BACKTICK_CONTINUATION = re.compile(r"`\s*\n\s*")
+
 def _join_continuation_lines(code: str) -> str:
-    return _BACKTICK_CONTINUATION.sub(" ", code)
+    regions = _find_string_regions(code)
+    result: list[str] = []
+    i = 0
+    n = len(code)
+    while i < n:
+        if code[i] == "`":
+            in_region = any(start <= i < end for start, end in regions)
+            if not in_region:
+                j = i + 1
+                while j < n and code[j] in " \t\r":
+                    j += 1
+                if j < n and code[j] == "\n":
+                    j += 1
+                    while j < n and code[j] in " \t\r":
+                        j += 1
+                    result.append(" ")
+                    i = j
+                    continue
+        result.append(code[i])
+        i += 1
+    return "".join(result)
+
 _ASSIGN_RE = re.compile(r"(.*?)(\$\w+(?:\.\w+)*)\s*=\s*$")
 def _match_assignment(before: str) -> tuple[str, str] | None:
     m = _ASSIGN_RE.match(before)
     if m:
         return m.group(1), m.group(2)
     return None
+
 _NCA_RE = re.compile(r"(\$\w+(?:\.\w+)*)\s*\?\?=\s*(.+)")
 def _transform_nca_line(line: str) -> str:
     regions = _find_line_regions(line)
@@ -187,6 +222,7 @@ def _transform_nca_line(line: str) -> str:
             replacement = f"if ($null -eq {var}) {{ {var} = {value} }}"
             new_line = new_line[: m.start()] + replacement + new_line[m.end() :]
     return new_line
+
 def _nc_rewrite_line(line: str, op_pos: int) -> str | None:
     left_end = op_pos
     while left_end > 0 and line[left_end - 1] == " ":
@@ -208,6 +244,7 @@ def _nc_rewrite_line(line: str, op_pos: int) -> str | None:
     else:
         replacement = f"{line[:left_start]}if ($null -ne {left_expr}) {{ {left_expr} }} else {{ {right_expr} }}"
     return replacement + line[right_end:]
+
 def _transform_nc_line(line: str) -> str:
     while True:
         regions = _find_line_regions(line)
@@ -227,6 +264,7 @@ def _transform_nc_line(line: str) -> str:
         if not rewritten:
             break
     return line
+
 def _transform_ternary_line(line: str) -> str:
     regions = _find_line_regions(line)
     depth_arr = _compute_depth_array(line)
@@ -236,6 +274,7 @@ def _transform_ternary_line(line: str) -> str:
             line[pos] == "?"
             and _outside_line_regions(regions, pos)
             and _depth_at(line, pos, depth_arr) == 0
+            and not (pos > 0 and line[pos - 1] == "$")
         ):
             colon_pos = _find_matching_colon(line, pos + 1, depth_arr)
             if colon_pos != -1:
@@ -271,12 +310,20 @@ def _transform_ternary_line(line: str) -> str:
                 continue
         pos += 1
     return line
+
 def _find_matching_colon(line: str, start: int, depth_arr: list[int] | None = None) -> int:
+    regions = _find_line_regions(line)
     for i in range(start, len(line)):
-        if line[i] == ":" and _depth_at(line, i, depth_arr) == 0:
+        if line[i] == ":" and _depth_at(line, i, depth_arr) == 0 and _outside_line_regions(regions, i):
+            if i > 0 and line[i - 1] == ":":
+                continue
+            if i + 1 < len(line) and line[i + 1] == ":":
+                continue
             return i
     return -1
+
 def _find_expr_start(line: str, end: int) -> int:
+    regions = _find_line_regions(line)
     depth = 0
     for i in range(end - 1, -1, -1):
         c = line[i]
@@ -286,13 +333,15 @@ def _find_expr_start(line: str, end: int) -> int:
             depth -= 1
             if depth < 0:
                 return i + 1
-        elif c in "=;|&,":
+        elif c in "=;|&," and _outside_line_regions(regions, i):
             if c == "=":
                 if i > 0 and line[i - 1] in "=!<>+-*/.":
                     continue
             return i + 1
     return 0
+
 def _find_expr_end(line: str, start: int) -> int:
+    regions = _find_line_regions(line)
     depth = 0
     for i in range(start, len(line)):
         c = line[i]
@@ -302,13 +351,14 @@ def _find_expr_end(line: str, start: int) -> int:
             depth -= 1
             if depth < 0:
                 return i
-        elif depth >= 0 and c in ";|&,":
+        elif depth >= 0 and c in ";|&," and _outside_line_regions(regions, i):
             return i
-        elif c == "#":
+        elif c == "#" and _outside_line_regions(regions, i):
             if i > 0 and line[i - 1] == "<":
                 continue
             return i
     return len(line)
+
 def _transform_chain_line(line: str) -> str:
     while True:
         regions = _find_line_regions(line)
@@ -336,6 +386,7 @@ def _transform_chain_line(line: str) -> str:
         right = line[best_pos + best_len :].strip()
         line = f"{left}; if ({condition}) {{ {right} }}"
     return line
+
 def _transform_null_conditional_dot_line(line: str) -> str:
     while True:
         regions = _find_line_regions(line)
@@ -375,10 +426,11 @@ def _transform_null_conditional_dot_line(line: str) -> str:
                     d = 1
                     k = j + 1
                     while k < len(line) and d > 0:
-                        if line[k] == "(":
-                            d += 1
-                        elif line[k] == ")":
-                            d -= 1
+                        if _outside_line_regions(regions, k):
+                            if line[k] == "(":
+                                d += 1
+                            elif line[k] == ")":
+                                d -= 1
                         k += 1
                     args = line[j:k]
                     me = k
@@ -403,6 +455,7 @@ def _transform_null_conditional_dot_line(line: str) -> str:
         if not matched:
             break
     return line
+
 def _transform_null_conditional_bracket_line(line: str) -> str:
     while True:
         regions = _find_line_regions(line)
@@ -426,10 +479,11 @@ def _transform_null_conditional_bracket_line(line: str) -> str:
             bracket_end = idx + 2
             while bracket_end < len(line) and bracket_depth > 0:
                 c = line[bracket_end]
-                if c == "[":
-                    bracket_depth += 1
-                elif c == "]":
-                    bracket_depth -= 1
+                if _outside_line_regions(regions, bracket_end):
+                    if c == "[":
+                        bracket_depth += 1
+                    elif c == "]":
+                        bracket_depth -= 1
                 bracket_end += 1
             index_expr = line[idx + 2 : bracket_end - 1]
             before = line[:expr_start]
@@ -447,6 +501,7 @@ def _transform_null_conditional_bracket_line(line: str) -> str:
         if not matched:
             break
     return line
+
 def _has_chain_operators(code: str) -> bool:
     """Check if code contains && or || outside string/comment regions."""
     regions = _find_string_regions(code)

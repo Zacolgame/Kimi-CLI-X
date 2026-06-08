@@ -81,7 +81,7 @@ class Powershell(CallableTool2[PowershellParams]):
 
         # Build the command line to pass to PowerShell -Command
         cmd, warning = pwsh_transform(params.cmd)
-        process_task = ProcessTask('powershell', ["-NoProfile", "-Command", cmd], None, None)
+        process_task = ProcessTask('powershell', ["-NoP", "-Exec", "Bypass", "-NoL", "-C", cmd], None, None)
         task_id = await process_task.start(self._session, "pwsh")
 
         await process_task.wait(params.timeout)

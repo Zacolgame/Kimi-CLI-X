@@ -772,3 +772,135 @@ Get-Service && Write-Output done || Write-Error failed'''
         assert "$a" in result
         assert "$b" in result
         assert "$c" in result
+# ============================================================================
+# Regression / bug-reproduction tests
+# ============================================================================
+
+
+class TestKnownBugs:
+    """Tests that reproduce currently known bugs in pwsh_transform."""
+
+    def test_ternary_with_static_member_access(self) -> None:
+        result, _ = pwsh_transform('$x = $cond ? [Math]::PI : 0')
+        assert "?" not in result
+        assert "[Math]::PI" in result
+        assert "if ($cond)" in result
+
+    def test_ternary_with_colon_in_string(self) -> None:
+        result, _ = pwsh_transform('$x = $cond ? "a:b" : "c"')
+        assert "?" not in result
+        assert '"a:b"' in result
+        assert '"c"' in result
+        assert "if ($cond)" in result
+
+    def test_null_coalescing_with_hash_in_string(self) -> None:
+        result, _ = pwsh_transform('$x = $a ?? "default#value"')
+        assert "??" not in result
+        assert '"default#value"' in result
+
+    def test_null_coalescing_with_comma_in_string(self) -> None:
+        result, _ = pwsh_transform('$x = $a ?? "a,b"')
+        assert "??" not in result
+        assert '"a,b"' in result
+
+    def test_null_conditional_method_with_paren_in_string_arg(self) -> None:
+        result, _ = pwsh_transform('$obj?.Foo("a)")')
+        assert "?." not in result
+        assert 'Foo("a)")' in result
+
+    def test_null_conditional_bracket_with_bracket_in_string_index(self) -> None:
+        result, _ = pwsh_transform('$arr?["key]"]')
+        assert "?[" not in result
+        assert '["key]"]' in result
+
+    def test_backtick_continuation_inside_comment(self) -> None:
+        code = '# comment `\nWrite-Output hello'
+        result, _ = pwsh_transform(code)
+        lines = result.splitlines()
+        assert len(lines) == 2
+        assert lines[1] == "Write-Output hello"
+
+    def test_dollar_question_as_ternary_condition(self) -> None:
+        result, _ = pwsh_transform('$? ? "yes" : "no"')
+        assert result == 'if ($?) { "yes" } else { "no" }'
+
+    @pytest.mark.xfail(reason="Limitation: command followed by ternary transforms entire command as condition")
+    def test_command_followed_by_ternary_without_parens(self) -> None:
+        result, _ = pwsh_transform('Write-Output $a ? $b : $c')
+        # Current behaviour incorrectly treats Write-Output $a as the condition
+        condition = result.split("if (")[1].split(")")[0]
+        assert "Write-Output $a" not in condition
+
+
+# ============================================================================
+# Infinite-loop safety tests
+# ============================================================================
+
+
+class TestNoInfiniteLoops:
+    """Inputs that previously caused hangs or look pathological."""
+
+    def test_bracket_then_dot_no_hang(self) -> None:
+        result, _ = pwsh_transform("$a?[0]?.Name")
+        assert isinstance(result, str)
+
+    def test_long_null_conditional_chain_no_hang(self) -> None:
+        result, _ = pwsh_transform("$a?.Items?[0]?.LastName")
+        assert isinstance(result, str)
+
+    def test_incomplete_null_coalescing_no_hang(self) -> None:
+        result, _ = pwsh_transform("$a ??")
+        assert isinstance(result, str)
+
+    def test_incomplete_null_conditional_dot_no_hang(self) -> None:
+        result, _ = pwsh_transform("$a?.")
+        assert isinstance(result, str)
+
+    def test_trailing_and_operator_no_hang(self) -> None:
+        result, _ = pwsh_transform("cmd1 &&")
+        assert isinstance(result, str)
+
+    def test_bare_question_marks_no_hang(self) -> None:
+        result, _ = pwsh_transform("?.?.?.?")
+        assert isinstance(result, str)
+
+    def test_many_nested_ternaries_no_hang(self) -> None:
+        code = '$a ? ($b ? ($c ? ($d ? 1 : 2) : 3) : 4) : 5'
+        result, _ = pwsh_transform(code)
+        assert isinstance(result, str)
+
+    def test_backtick_rain_no_hang(self) -> None:
+        code = "Write-Output `\n`\n`\nhello"
+        result, _ = pwsh_transform(code)
+        assert isinstance(result, str)
+
+
+# ============================================================================
+# Additional bug-reproduction tests discovered during deep analysis
+# ============================================================================
+
+
+class TestAdditionalBugs:
+    """Further edge-case bugs found by studying _find_string_regions and depth handling."""
+
+    def test_here_string_false_positive_consumes_rest_of_file(self) -> None:
+        code = "$x = @'foo'@\nWrite-Output hello && cmd2"
+        result, _ = pwsh_transform(code)
+        # The second line should have its && transformed, but because the
+        # here-string scanner swallows to EOF, it is left untouched.
+        assert "&&" not in result
+
+    def test_at_quote_inside_line_not_here_string(self) -> None:
+        code = "$text = @' preserved ?? and ?. '\nWrite-Output hello && cmd2"
+        result, _ = pwsh_transform(code)
+        assert "&&" not in result
+
+    @pytest.mark.xfail(reason="Limitation: && inside {} is skipped because depth > 0")
+    def test_chain_inside_script_block(self) -> None:
+        result, _ = pwsh_transform("$sb = { cmd1 && cmd2 }")
+        assert "&&" not in result
+
+    @pytest.mark.xfail(reason="Limitation: && inside $(...) is skipped because depth > 0")
+    def test_chain_inside_subexpression(self) -> None:
+        result, _ = pwsh_transform("$(cmd1 && cmd2)")
+        assert "&&" not in result
