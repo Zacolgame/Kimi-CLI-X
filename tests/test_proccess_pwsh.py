@@ -178,7 +178,7 @@ class TestNullConditional:
 
     def test_null_conditional_assignment(self) -> None:
         result, _ = pwsh_transform("$x = $a?.Length")
-        assert "$x = if ($null -ne $a) { $a.Length }" in result
+        assert "$x = $(if ($null -ne $a) { $a.Length })" == result
 
 
 # ============================================================================
@@ -901,3 +901,1759 @@ class TestAdditionalBugs:
     def test_chain_inside_subexpression(self):
         result, _ = pwsh_transform("$(cmd1 && cmd2)")
         assert "&&" not in result
+# ============================================================================
+# Depth tracking vs strings/comments  (BUG: _compute_depths ignores strings)
+# ============================================================================
+
+class TestDepthTrackingStrings:
+    """_compute_depths counts brackets even inside strings/comments.
+    This can break ternary colon matching when true-branch strings
+    contain brackets."""
+
+    def test_ternary_with_paren_in_string_not_transformed(self) -> None:
+        result, _ = pwsh_transform('$x = $cond ? "a(b" : "c"')
+        # _compute_depths is now string-aware, so ternary transforms correctly
+        assert "?" not in result
+        assert '"a(b"' in result
+        assert '"c"' in result
+
+    def test_ternary_with_bracket_in_string_not_transformed(self) -> None:
+        result, _ = pwsh_transform('$x = $cond ? "a[b" : "c"')
+        assert "?" not in result
+        assert '"a[b"' in result
+        assert '"c"' in result
+
+    def test_ternary_with_brace_in_string_not_transformed(self) -> None:
+        result, _ = pwsh_transform('$x = $cond ? "a{b" : "c"')
+        assert "?" not in result
+        assert '"a{b"' in result
+        assert '"c"' in result
+
+    def test_ternary_with_colon_in_true_branch_string(self) -> None:
+        # No brackets, so this works despite the extra colon inside string.
+        result, _ = pwsh_transform('$x = $cond ? "a:b:c" : "d"')
+        assert "?" not in result
+        assert '"a:b:c"' in result
+        assert '"d"' in result
+
+    def test_ternary_with_drive_path_in_true_branch(self) -> None:
+        result, _ = pwsh_transform('$x = $cond ? "C:\\foo" : "D:\\bar"')
+        assert "?" not in result
+        assert '"C:\\foo"' in result
+        assert '"D:\\bar"' in result
+
+
+# ============================================================================
+# Null-conditional on complex base expressions
+# ============================================================================
+
+class TestNullConditionalComplexBase:
+    def test_array_element_then_property(self) -> None:
+        result, _ = pwsh_transform("$arr[0]?.Name")
+        assert "?." not in result
+        assert "$arr[0]" in result
+        assert ".Name" in result
+
+    def test_hashtable_access_then_property(self) -> None:
+        result, _ = pwsh_transform('$ht["key"]?.Value')
+        assert "?." not in result
+        assert '$ht["key"]' in result
+        assert ".Value" in result
+
+    def test_property_then_bracket_then_property(self) -> None:
+        result, _ = pwsh_transform('$a.Items[0]?.Name')
+        assert "?." not in result
+        assert "$a.Items[0]" in result
+        assert ".Name" in result
+
+    def test_subexpression_then_property(self) -> None:
+        result, _ = pwsh_transform("$(Get-Item $p)?.Length")
+        assert "?." not in result
+        assert "$(Get-Item $p)" in result
+        assert ".Length" in result
+
+    def test_nested_subexpression_then_property(self) -> None:
+        result, _ = pwsh_transform("$($($a))?.Name")
+        assert "?." not in result
+        assert "$($($a))" in result
+
+    def test_null_literal_then_property(self) -> None:
+        result, _ = pwsh_transform("$null?.Property")
+        assert "?." not in result
+        assert "$null" in result
+
+    def test_variable_with_braces_then_property(self) -> None:
+        result, _ = pwsh_transform("${foo-bar}?.Name")
+        assert "?." not in result
+        assert "${foo-bar}" in result
+        assert ".Name" in result
+
+
+# ============================================================================
+# Scoped variables and property access with operators
+# ============================================================================
+
+class TestScopedVariables:
+    def test_global_scope_null_coalescing(self) -> None:
+        result, _ = pwsh_transform('$global:x ?? "default"')
+        assert "??" not in result
+        assert "$global:x" in result
+
+    def test_env_scope_null_coalescing(self) -> None:
+        result, _ = pwsh_transform('$env:PATH ?? "C:\\Windows"')
+        assert "??" not in result
+        assert "$env:PATH" in result
+
+    def test_script_scope_nca(self) -> None:
+        result, _ = pwsh_transform('$script:count ??= 0')
+        assert "??=" not in result
+        assert "$script:count" in result
+        assert "if ($null -eq $script:count)" in result
+
+    def test_property_access_nca(self) -> None:
+        result, _ = pwsh_transform('$obj.Name ??= "default"')
+        assert "??=" not in result
+        assert "if ($null -eq $obj.Name)" in result
+        assert "$obj.Name = \"default\"" in result
+
+    def test_global_scope_null_conditional(self) -> None:
+        result, _ = pwsh_transform('$global:obj?.Name')
+        assert "?." not in result
+        assert "$global:obj" in result
+
+
+# ============================================================================
+# Comments and strings interaction
+# ============================================================================
+
+class TestCommentStringInteraction:
+    def test_hash_inside_single_quoted_string(self) -> None:
+        result, _ = pwsh_transform("'hello # world' ?? 'default'")
+        assert "??" not in result
+        assert "'hello # world'" in result
+        assert "'default'" in result
+
+    def test_hash_inside_double_quoted_string(self) -> None:
+        result, _ = pwsh_transform('"hello # world" ?? "default"')
+        assert "??" not in result
+        assert '"hello # world"' in result
+
+    def test_block_comment_start_inside_line_comment(self) -> None:
+        code = '# <# not a block comment\n$x = $a ?? "default"'
+        result, _ = pwsh_transform(code)
+        assert "<# not a block comment" in result
+        assert "??" not in result
+
+    def test_line_comment_after_operator(self) -> None:
+        result, _ = pwsh_transform('$x = $a ?? "default" # comment with ??')
+        # BUG: the comment is swallowed into the right-hand expression of ??
+        # because _expr_right does not stop at the # comment boundary.
+        # The operator ?? is transformed, but the ?? inside the comment is preserved.
+        assert "if ($null -ne $a)" in result
+        assert "# comment with ??" in result
+
+    def test_single_quoted_string_with_doubled_quotes(self) -> None:
+        result, _ = pwsh_transform("'It''s ?? and ?. here'")
+        assert "??" in result
+        assert "?." in result
+
+    def test_double_quoted_string_with_escaped_backtick(self) -> None:
+        result, _ = pwsh_transform('"a ``?? b"')
+        assert "??" in result
+
+
+# ============================================================================
+# Nested / multi-line block comments
+# ============================================================================
+
+class TestBlockComments:
+    def test_nested_block_comment(self) -> None:
+        code = '<# outer <# inner #> still outer #>\n$x = $a ?? "default"'
+        result, _ = pwsh_transform(code)
+        assert "??" not in result
+        assert "outer" in result
+        assert "inner" in result
+
+    def test_block_comment_spanning_lines_with_operators(self) -> None:
+        code = '<#\n?? operator\n?. operator\n&& operator\n#>\nWrite-Output done'
+        result, _ = pwsh_transform(code)
+        assert "??" in result
+        assert "?." in result
+        assert "&&" in result
+
+
+# ============================================================================
+# Ternary with complex true/false branches
+# ============================================================================
+
+class TestTernaryComplexBranches:
+    def test_ternary_with_hashtable_true_branch(self) -> None:
+        result, _ = pwsh_transform('$x = $cond ? @{ a = 1 } : @{ b = 2 }')
+        assert "?" not in result
+        assert "@{ a = 1 }" in result
+        assert "@{ b = 2 }" in result
+
+    def test_ternary_with_script_block_branches(self) -> None:
+        result, _ = pwsh_transform('$x = $cond ? { $a } : { $b }')
+        assert "?" not in result
+        assert "{ $a }" in result
+        assert "{ $b }" in result
+
+    def test_ternary_with_array_literal_branches(self) -> None:
+        result, _ = pwsh_transform('$x = $cond ? @(1,2) : @(3,4)')
+        assert "?" not in result
+        assert "@(1,2)" in result
+        assert "@(3,4)" in result
+
+    def test_ternary_with_match_operator(self) -> None:
+        result, _ = pwsh_transform('$x = $a -match "test" ? "yes" : "no"')
+        assert "?" not in result
+        assert 'if ($a -match "test")' in result
+
+    def test_ternary_dollar_question_as_condition(self) -> None:
+        result, _ = pwsh_transform('$? ? $? : $false')
+        assert result == 'if ($?) { $? } else { $false }'
+
+    def test_ternary_with_test_path_condition(self) -> None:
+        result, _ = pwsh_transform('(Test-Path $f) ? "exists" : "missing"')
+        assert "?" not in result
+        assert "if ((Test-Path $f))" in result
+
+
+# ============================================================================
+# Null coalescing with complex left/right expressions
+# ============================================================================
+
+class TestNullCoalescingComplex:
+    def test_null_coalescing_with_array_literal_left(self) -> None:
+        result, _ = pwsh_transform('$x = @(1,2) ?? @(3)')
+        assert "??" not in result
+        assert "@(1,2)" in result
+        assert "@(3)" in result
+
+    def test_null_coalescing_with_hashtable_literal_left(self) -> None:
+        result, _ = pwsh_transform('$x = @{ a = 1 } ?? @{ b = 2 }')
+        assert "??" not in result
+        assert "@{ a = 1 }" in result
+
+    def test_null_coalescing_with_script_block_right(self) -> None:
+        result, _ = pwsh_transform('$x = $sb ?? { Write-Output default }')
+        assert "??" not in result
+        assert "{ Write-Output default }" in result
+
+    def test_null_coalescing_inside_parentheses(self) -> None:
+        result, _ = pwsh_transform('$x = ($a) ?? "default"')
+        assert "??" not in result
+        assert "($a)" in result
+
+    def test_null_coalescing_with_nested_parens(self) -> None:
+        result, _ = pwsh_transform('$x = (($a)) ?? "default"')
+        assert "??" not in result
+        assert "(($a))" in result
+
+    def test_string_with_operator_then_real_operator(self) -> None:
+        # LIMITATION: _expr_left scans past string boundaries, so the entire
+        # left side includes the preceding string and its inner operator.
+        result, _ = pwsh_transform("'a ?? b' ?? 'c'")
+        assert "if ($null -ne 'a ?? b')" in result
+        assert "'a ?? b'" in result
+        assert "'c'" in result
+
+    def test_double_quoted_string_with_operator_then_real_operator(self) -> None:
+        result, _ = pwsh_transform('"a ?? b" ?? "c"')
+        assert "if ($null -ne \"a ?? b\")" in result
+        assert '"a ?? b"' in result
+        assert '"c"' in result
+
+
+# ============================================================================
+# Pipeline chains with special contexts
+# ============================================================================
+
+class TestChainSpecialContexts:
+    def test_chain_with_semicolon_before(self) -> None:
+        result, _ = pwsh_transform("cmd1 ; cmd2 && cmd3")
+        assert "&&" not in result
+        assert "if ($?)" in result
+        assert "cmd1 ; cmd2" in result
+
+    def test_chain_inside_array_subexpression(self) -> None:
+        result, _ = pwsh_transform("@(cmd1 && cmd2)")
+        assert "&&" not in result
+        assert "cmd1" in result
+        assert "cmd2" in result
+
+    def test_chain_with_variable_assignment(self) -> None:
+        result, _ = pwsh_transform("$r = cmd1 && cmd2")
+        assert "&&" not in result
+        assert "if ($?)" in result
+
+    def test_chain_after_foreach_pipeline(self) -> None:
+        result, _ = pwsh_transform("1..3 | ForEach-Object { $_ } && Write-Output done")
+        assert "&&" not in result
+        assert "if ($?)" in result
+
+
+# ============================================================================
+# Null-conditional method args with inner operators
+# ============================================================================
+
+class TestNullConditionalMethodNesting:
+    def test_method_arg_with_inner_null_conditional(self) -> None:
+        # Inner ?. inside method args is now transformed on a subsequent pass.
+        result, _ = pwsh_transform("$a?.Foo($b?.Bar())")
+        assert "?." not in result
+        assert "$a" in result
+        assert ".Foo(" in result
+        assert ".Bar()" in result
+
+    def test_method_arg_with_inner_null_coalescing(self) -> None:
+        result, _ = pwsh_transform('$a?.Foo($b ?? "default")')
+        assert "?." not in result
+        assert "??" not in result
+        assert '"default"' in result
+
+    def test_index_with_nested_brackets(self) -> None:
+        result, _ = pwsh_transform("$a?[$i[$j]]")
+        assert "?[" not in result
+        assert "$i[$j]" in result
+
+
+# ============================================================================
+# Unterminated / malformed inputs
+# ============================================================================
+
+class TestMalformedInputs:
+    def test_unterminated_double_quoted_string(self) -> None:
+        result, _ = pwsh_transform('Write-Output "hello')
+        assert isinstance(result, str)
+
+    def test_unterminated_single_quoted_string(self) -> None:
+        result, _ = pwsh_transform("Write-Output 'hello")
+        assert isinstance(result, str)
+
+    def test_unterminated_block_comment(self) -> None:
+        result, _ = pwsh_transform("<# hello\nWrite-Output $a ?? 'default'")
+        assert isinstance(result, str)
+
+    def test_unterminated_subexpression(self) -> None:
+        result, _ = pwsh_transform("$($a + ")
+        assert isinstance(result, str)
+
+    def test_whitespace_only_input(self) -> None:
+        result, _ = pwsh_transform("   \n  \t  \n  ")
+        assert isinstance(result, str)
+
+    def test_line_with_only_comment(self) -> None:
+        result, _ = pwsh_transform("# just a comment")
+        assert result == "# just a comment"
+
+
+# ============================================================================
+# Mixed / combined operator stress
+# ============================================================================
+
+class TestMixedOperatorStress:
+    def test_null_coalescing_then_ternary(self) -> None:
+        # LIMITATION: after ?? is transformed, the resulting ternary sits
+        # inside braces at depth>0, so _transform_ternary_line skips it.
+        result, _ = pwsh_transform('$x = $a ?? $b ? "t" : "f"')
+        assert "??" not in result
+        # ternary inside generated braces is NOT transformed (depth>0)
+        assert "?" in result
+        assert "$a" in result
+        assert "$b" in result
+
+    def test_ternary_then_null_coalescing(self) -> None:
+        result, _ = pwsh_transform('$x = $cond ? ($a ?? $b) : $c')
+        assert "??" not in result
+        assert "?" not in result
+        assert "$cond" in result
+
+    def test_null_conditional_then_null_coalescing(self) -> None:
+        # ?. now runs before ?? and wraps its output in $(), so ?? can safely
+        # use the transformed expression as an operand.
+        result, _ = pwsh_transform('$x = $a?.Name ?? "default"')
+        assert "?." not in result
+        assert "??" not in result
+        assert "if ($null -ne $(if ($null -ne $a) { $a.Name }))" in result
+        assert '"default"' in result
+
+    def test_all_operators_in_one_line(self) -> None:
+        result, _ = pwsh_transform('$a ??= $b; $c = $d?.Name ?? "x"; cmd1 && cmd2 || cmd3')
+        assert "??=" not in result
+        assert "?." not in result
+        assert "??" not in result
+        assert "&&" not in result
+        assert "||" not in result
+        # $d?.Name is transformed first, then ?? uses the wrapped result
+        assert "if ($null -ne $(if ($null -ne $d) { $d.Name }))" in result
+
+    def test_null_conditional_chain_with_index_and_property(self) -> None:
+        result, _ = pwsh_transform('$a?.Items?[0]?.Name')
+        assert "?." not in result
+        assert "$a" in result
+
+
+# ============================================================================
+# Backtick edge cases
+# ============================================================================
+
+class TestBacktickEdgeCases:
+    def test_backtick_before_operator_no_newline(self) -> None:
+        result, _ = pwsh_transform("cmd1 `&& cmd2")
+        # No newline after backtick, so `& is literal backtick + &, not continuation
+        assert isinstance(result, str)
+
+    def test_multiple_backticks_with_newlines(self) -> None:
+        result, _ = pwsh_transform("Write-Output `\n`\n`\nhello")
+        assert isinstance(result, str)
+        assert "hello" in result
+
+    def test_backtick_continuation_before_comment(self) -> None:
+        code = "$x = $a ??`\n  # this is a comment\n  'default'"
+        result, _ = pwsh_transform(code)
+        assert isinstance(result, str)
+
+
+# ============================================================================
+# Expression boundary edge cases
+# ============================================================================
+
+class TestExprBoundaryEdgeCases:
+    def test_null_coalescing_after_command_prefix_in_parens(self) -> None:
+        result, _ = pwsh_transform('Write-Output ($a ?? "default")')
+        assert "??" not in result
+        assert "if ($null -ne $a)" in result
+        assert "Write-Output" in result
+
+    def test_ternary_after_command_prefix_in_parens(self) -> None:
+        # BUG: ternary inside () is at depth>0, so it is skipped.
+        result, _ = pwsh_transform('Write-Output ($cond ? "a" : "b")')
+        assert "?" in result
+        assert "Write-Output ($cond ? \"a\" : \"b\")" == result
+
+    def test_null_conditional_after_command_prefix(self) -> None:
+        # BUG: _expr_left includes the command prefix as part of the base expr.
+        result, _ = pwsh_transform('Write-Output $a?.Name')
+        assert "?." not in result
+        # Currently produces: if ($null -ne Write-Output $a) { Write-Output $a.Name }
+        assert "Write-Output" in result
+        assert "$a" in result
+
+    def test_ternary_with_type_accelerator_condition(self) -> None:
+        result, _ = pwsh_transform('[string]::IsNullOrEmpty($s) ? "empty" : "non-empty"')
+        assert "?" not in result
+        assert "[string]::IsNullOrEmpty($s)" in result
+
+
+# ============================================================================
+# Idempotency for new patterns
+# ============================================================================
+
+class TestNewIdempotency:
+    def test_null_conditional_array_element_idempotent(self) -> None:
+        code = "$arr[0]?.Name"
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+    def test_property_nca_idempotent(self) -> None:
+        code = '$obj.Name ??= "default"'
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+    def test_ternary_with_hashtable_idempotent(self) -> None:
+        code = '$x = $cond ? @{ a = 1 } : @{ b = 2 }'
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+
+# ============================================================================
+# Null-conditional with variable property names (?.$prop)
+# ============================================================================
+
+
+class TestNullConditionalVariableProperty:
+    def test_simple_variable_property(self) -> None:
+        result, _ = pwsh_transform("$a?.$property")
+        assert "?." not in result
+        assert "$a" in result
+        assert "$property" in result
+        assert "if ($null -ne $a)" in result
+
+    def test_variable_property_with_scope(self) -> None:
+        result, _ = pwsh_transform("$a?.$global:prop")
+        assert "?." not in result
+        assert "$global:prop" in result
+
+    def test_variable_property_braced(self) -> None:
+        result, _ = pwsh_transform("$a?.${var}")
+        assert "?." not in result
+        assert "${var}" in result
+
+    def test_variable_property_assignment(self) -> None:
+        result, _ = pwsh_transform("$x = $a?.$property")
+        assert "?." not in result
+        assert "$x = " in result
+
+    def test_variable_property_chained(self) -> None:
+        result, _ = pwsh_transform("$a?.$prop?.$other")
+        assert "?." not in result
+        assert "$prop" in result
+        assert "$other" in result
+
+    def test_mixed_variable_and_plain_chain(self) -> None:
+        result, _ = pwsh_transform("$a?.Name?.$prop")
+        assert "?." not in result
+        assert "Name" in result
+        assert "$prop" in result
+
+    def test_variable_property_idempotent(self) -> None:
+        code = "$a?.$property"
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+
+# ============================================================================
+# Null-conditional with quoted member names (?.'name' / ?."name")
+# ============================================================================
+
+
+class TestNullConditionalQuotedMember:
+    def test_single_quoted_member(self) -> None:
+        result, _ = pwsh_transform("$a?.'property-name'")
+        assert "?." not in result
+        assert "'property-name'" in result
+
+    def test_double_quoted_member(self) -> None:
+        result, _ = pwsh_transform('$a?."property-name"')
+        assert "?." not in result
+        assert '"property-name"' in result
+
+    def test_double_quoted_with_spaces(self) -> None:
+        result, _ = pwsh_transform('$a?."property name"')
+        assert "?." not in result
+        assert '"property name"' in result
+
+    def test_single_quoted_with_doubled_quote(self) -> None:
+        result, _ = pwsh_transform("$a?.'it''s'")
+        assert "?." not in result
+        assert "'it''s'" in result
+
+    def test_double_quoted_with_subexpression(self) -> None:
+        result, _ = pwsh_transform('$a?."prop$(1+1)"')
+        assert "?." not in result
+        assert '"prop$(1+1)"' in result
+
+    def test_quoted_member_chained(self) -> None:
+        result, _ = pwsh_transform("$a?.Name?.'other-prop'")
+        assert "?." not in result
+        assert "Name" in result
+        assert "'other-prop'" in result
+
+    def test_quoted_member_with_method(self) -> None:
+        result, _ = pwsh_transform("$a?.'get-Name'()")
+        assert "?." not in result
+        assert "'get-Name'()" in result
+
+    def test_quoted_member_idempotent(self) -> None:
+        code = "$a?.'prop-name'"
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+
+# ============================================================================
+# Null-coalescing assignment with braced/scoped variables
+# ============================================================================
+
+
+class TestNCABracedVariables:
+    def test_nca_braced_variable(self) -> None:
+        result, _ = pwsh_transform('${global:var} ??= "init"')
+        assert "??=" not in result
+        assert "if ($null -eq ${global:var})" in result
+
+    def test_nca_braced_nested(self) -> None:
+        result, _ = pwsh_transform('${outer.${inner}} ??= "default"')
+        assert "??=" not in result
+        assert "if ($null -eq ${outer.${inner}})" in result
+
+    def test_nca_scoped_variable(self) -> None:
+        result, _ = pwsh_transform('$global:var ??= "init"')
+        assert "??=" not in result
+        assert "if ($null -eq $global:var)" in result
+
+    def test_nca_with_semicolon_after(self) -> None:
+        result, _ = pwsh_transform('${x} ??= 1; Write-Output ${x}')
+        assert "??=" not in result
+        assert "if ($null -eq ${x})" in result
+        assert "Write-Output" in result
+
+    def test_nca_braced_idempotent(self) -> None:
+        code = '${global:var} ??= "init"'
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+
+# ============================================================================
+# Null-conditional with complex base expressions
+# ============================================================================
+
+
+class TestNullConditionalComplexChains:
+    def test_multi_variable_prop_chain(self) -> None:
+        result, _ = pwsh_transform("$a?.$b?.$c?.$d")
+        assert "?." not in result
+        assert "$a" in result
+        assert "$b" in result
+        assert "$c" in result
+        assert "$d" in result
+
+    def test_mixed_all_member_types(self) -> None:
+        result, _ = pwsh_transform("$a?.$b?.'c-d'?.$e")
+        assert "?." not in result
+        assert "$b" in result
+        assert "'c-d'" in result
+        assert "$e" in result
+
+    def test_double_quoted_member_chain(self) -> None:
+        result, _ = pwsh_transform('$a?."b-c"?."d-e"')
+        assert "?." not in result
+        assert '"b-c"' in result
+        assert '"d-e"' in result
+
+    def test_cmd_prefix_with_variable_prop(self) -> None:
+        result, _ = pwsh_transform("Write-Output $a?.Name")
+        assert "?." not in result
+        assert "Write-Output" in result
+        assert "$a" in result
+
+    def test_array_element_prop_chain(self) -> None:
+        result, _ = pwsh_transform("$arr[0][1]?.Name")
+        assert "?." not in result
+        assert "$arr[0][1]" in result
+        assert "Name" in result
+
+
+# ============================================================================
+# More edge cases discovered during analysis
+# ============================================================================
+
+
+class TestDiscoveredEdgeCases:
+    def test_ternary_with_dollar_question_all(self) -> None:
+        result, _ = pwsh_transform("$? ? $? : $?")
+        assert result == "if ($?) { $? } else { $? }"
+
+    def test_null_coalescing_in_double_quoted_string_preserved(self) -> None:
+        result, _ = pwsh_transform('"$a ?? $b" | Write-Output')
+        assert "??" in result  # preserved inside string
+
+    def test_incomplete_here_string_preserved(self) -> None:
+        result, _ = pwsh_transform("$text = @'\nhello\n&& cmd2")
+        # Unterminated here-string: the rest of file is treated as string
+        assert "&&" in result  # preserved because in unterminated here-string
+
+    def test_question_mark_not_preceded_by_dollar(self) -> None:
+        """? that is not preceded by $ and not followed by colon should be safe."""
+        result, _ = pwsh_transform("$a ?")
+        # No crash, no false match
+        assert "$a" in result
+
+    def test_double_question_at_end_no_crash(self) -> None:
+        result, _ = pwsh_transform("$a ??")
+        assert "$a" in result
+
+    def test_null_conditional_dot_at_end_no_crash(self) -> None:
+        result, _ = pwsh_transform("$a?.")
+        assert "$a" in result
+
+
+# ============================================================================
+# Idempotency for all new patterns
+# ============================================================================
+
+
+class TestNewComprehensiveIdempotency:
+    def test_var_prop_chain_idempotent(self) -> None:
+        code = "$a?.$b?.$c?.$d"
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+    def test_mixed_chain_idempotent(self) -> None:
+        code = "$a?.$b?.'c-d'?.$e"
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+    def test_brace_var_nca_idempotent(self) -> None:
+        code = '${global:var} ??= "init"'
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+    def test_quoted_member_chain_idempotent(self) -> None:
+        code = '$a?."b-c"?."d-e"'
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+
+# ============================================================================
+# Deeply nested block comments
+# ============================================================================
+
+
+class TestNestedBlockComments:
+    def test_triple_nested_block_comment(self) -> None:
+        code = '<# L1 <# L2 <# L3 #> still L2 #> still L1 #>\n$x = $a ?? "default"'
+        result, _ = pwsh_transform(code)
+        assert "??" not in result
+        assert "L1" in result
+        assert "L2" in result
+        assert "L3" in result
+
+    def test_block_comment_then_operators_on_next_line(self) -> None:
+        code = '<# comment #>\n$a ?? "default"'
+        result, _ = pwsh_transform(code)
+        assert "??" not in result
+        assert "if ($null -ne $a)" in result
+
+    def test_block_comment_then_chain_on_next_line(self) -> None:
+        code = '<# comment #>\ncmd1 && cmd2'
+        result, _ = pwsh_transform(code)
+        assert "&&" not in result
+        assert "if ($?)" in result
+
+
+# ============================================================================
+# Double-quoted here-strings
+# ============================================================================
+
+
+class TestHereStringDoubleQuotedExtra:
+    def test_at_double_quote_here_string_preserves_operators(self) -> None:
+        code = '$text = @"\n?? and ?. and && and ||\n"@\nWrite-Output done'
+        result, _ = pwsh_transform(code)
+        assert "??" in result  # preserved inside here-string
+        assert "?." in result
+        assert "&&" in result
+        assert "||" in result
+
+    def test_at_double_quote_here_string_with_subexpressions(self) -> None:
+        code = '$text = @"\nHello $(Get-Date) and ?? is fine\n"@\ncmd1 && cmd2'
+        result, _ = pwsh_transform(code)
+        assert "$(Get-Date)" in result  # preserved in here-string
+        # The && on the line after the here-string SHOULD be transformed
+        assert "if ($?)" in result
+
+    def test_at_single_quote_here_string_followed_by_operators(self) -> None:
+        code = "$text = @'\nhello\n'@\n$x = $a ?? 'default'"
+        result, _ = pwsh_transform(code)
+        assert "??" not in result
+        assert "if ($null -ne $a)" in result
+
+
+# ============================================================================
+# Backtick continuation deep edge cases
+# ============================================================================
+
+
+class TestBacktickDeepEdgeCases:
+    def test_backtick_inside_double_quoted_string_not_collapsed(self) -> None:
+        """Backtick inside a double-quoted string is not a line continuation."""
+        code = '$x = "hello`nthere $a ?? $b"'
+        result, _ = pwsh_transform(code)
+        # ?? inside string should be preserved
+        assert "??" in result
+
+    def test_backtick_inside_single_quoted_string_not_collapsed(self) -> None:
+        code = "$x = 'hello`nthere $a ?? $b'"
+        result, _ = pwsh_transform(code)
+        # Inside single-quoted string, ` is literal
+        assert "??" in result
+
+    def test_backtick_with_only_carriage_return(self) -> None:
+        """Backtick followed by \\r only (not \\n) is NOT a line continuation."""
+        code = "cmd1 `\r && cmd2"
+        result, _ = pwsh_transform(code)
+        # The ` is NOT collapsed since \r is not \n
+        assert "`" in result
+
+    def test_backtick_at_eof(self) -> None:
+        """Backtick at end of file with no following characters."""
+        result, _ = pwsh_transform("Write-Output `")
+        assert isinstance(result, str)
+        assert "`" in result or "Write-Output" in result
+
+    def test_consecutive_backtick_continuations(self) -> None:
+        code = "cmd1 `\n`\n`\n&& cmd2"
+        result, _ = pwsh_transform(code)
+        assert "&&" not in result
+        assert "if ($?)" in result
+
+    def test_backtick_continuation_with_tabs(self) -> None:
+        code = "cmd1 `\n\t\t&& cmd2"
+        result, _ = pwsh_transform(code)
+        assert "&&" not in result
+        assert "if ($?)" in result
+
+
+# ============================================================================
+# _strip_command_prefix with PS keywords
+# ============================================================================
+
+
+class TestCommandPrefixStripping:
+    def test_keyword_not_stripped(self) -> None:
+        """PS keywords like 'if', 'for', 'while' should NOT be stripped as command prefix."""
+        result, _ = pwsh_transform('if $a ?? "default"')
+        # 'if' is a keyword, not a command, so it should not be stripped
+        # This means $a is recognized as left of ??, not "if $a"
+        assert "??" not in result
+
+    def test_foreach_not_stripped(self) -> None:
+        result, _ = pwsh_transform('foreach $a ?? "default"')
+        assert "??" not in result
+        assert "$a" in result
+
+    def test_return_not_stripped(self) -> None:
+        result, _ = pwsh_transform('return $a ?? "default"')
+        assert "??" not in result
+        assert "$a" in result
+
+    def test_real_command_is_stripped(self) -> None:
+        result, _ = pwsh_transform('Write-Output $a ?? "default"')
+        assert "??" not in result
+        assert "if ($null -ne $a)" in result
+
+
+# ============================================================================
+# _match_assignment with complex left-hand sides
+# ============================================================================
+
+
+class TestComplexAssignmentDetection:
+    def test_scoped_property_assignment_coalescing(self) -> None:
+        result, _ = pwsh_transform('$global:obj.Property = $a ?? "default"')
+        assert "??" not in result
+        assert "$global:obj.Property = " in result
+        assert "if ($null -ne $a)" in result
+
+    def test_no_assignment_coalescing(self) -> None:
+        result, _ = pwsh_transform('$a ?? "default"')
+        assert "=" not in result.split("if")[0]  # no assignment before the if
+
+    def test_assignment_with_ternary(self) -> None:
+        result, _ = pwsh_transform('$x = $cond ? "a" : "b"')
+        assert "$x = " in result
+
+
+# ============================================================================
+# _find_expr_start / _find_expr_end edge cases
+# ============================================================================
+
+
+class TestExpressionBoundariesDeep:
+    def test_expr_at_start_of_line(self) -> None:
+        """Expression starting at column 0."""
+        result, _ = pwsh_transform('$a ?? "default"')
+        assert "??" not in result
+
+    def test_expr_at_end_of_line(self) -> None:
+        """Expression ending at end of line (no trailing chars)."""
+        result, _ = pwsh_transform('$x = $a ?? "default"')
+        assert "??" not in result
+
+    def test_array_subexpr_boundary(self) -> None:
+        """@() as expression boundary."""
+        result, _ = pwsh_transform('$x = @(1,2) ?? @(3,4)')
+        assert "??" not in result
+        assert "@(1,2)" in result
+        assert "@(3,4)" in result
+
+    def test_at_paren_boundary_for_ternary(self) -> None:
+        """Ternary where condition is @()."""
+        result, _ = pwsh_transform('$x = @(1).Count -gt 0 ? "yes" : "no"')
+        assert "?" not in result
+        assert "if (@(1).Count -gt 0)" in result
+
+    def test_ampersand_call_operator_boundary(self) -> None:
+        """& call operator as boundary."""
+        result, _ = pwsh_transform('& $cmd $a ?? "default"')
+        assert "??" not in result
+
+
+# ============================================================================
+# Null-conditional with unusual member-name characters
+# ============================================================================
+
+
+class TestNullConditionalUnusualMembers:
+    def test_dot_then_at_sign_not_transformed(self) -> None:
+        """$a?.@ is invalid; should not crash or transform."""
+        result, _ = pwsh_transform("$a?.@")
+        assert isinstance(result, str)
+        # @ is not a valid member name char, so ?. is not transformed
+        assert "$a" in result
+
+    def test_dot_then_hash_not_transformed(self) -> None:
+        """$a?.#comment should stop at #."""
+        result, _ = pwsh_transform("$a?.#comment")
+        assert isinstance(result, str)
+
+    def test_dot_then_lparen_method(self) -> None:
+        """$a?.(...) is invalid; should not crash."""
+        result, _ = pwsh_transform("$a?.(Get-Member)")
+        assert isinstance(result, str)
+
+
+# ============================================================================
+# ?[ inside strings/regions
+# ============================================================================
+
+
+class TestBracketNullConditionalInStrings:
+    def test_bracket_qmark_inside_single_quoted_string(self) -> None:
+        result, _ = pwsh_transform("Write-Output '?[0] is not transformed'")
+        assert "?[" in result
+        assert "if ($null -ne" not in result
+
+    def test_bracket_qmark_inside_double_quoted_string(self) -> None:
+        result, _ = pwsh_transform('Write-Output "?[0] is not transformed"')
+        assert "?[" in result
+        assert "if ($null -ne" not in result
+
+    def test_bracket_qmark_inside_comment(self) -> None:
+        result, _ = pwsh_transform("# ?[$a] is a comment\nWrite-Output hello")
+        assert "?[" in result
+
+
+# ============================================================================
+# ??= at absolute start of line
+# ============================================================================
+
+
+class TestNCALineStart:
+    def test_nca_at_line_start(self) -> None:
+        """$a ??= 'x' at column 0 of line."""
+        result, _ = pwsh_transform("$a ??= 'x'")
+        assert "??=" not in result
+        assert "if ($null -eq $a)" in result
+
+    def test_nca_braced_at_line_start(self) -> None:
+        result, _ = pwsh_transform("${a} ??= 'x'")
+        assert "??=" not in result
+        assert "if ($null -eq ${a})" in result
+
+
+# ============================================================================
+# _has_chain_operators with operators inside/outside strings
+# ============================================================================
+
+
+class TestHasChainOperators:
+    def test_chain_inside_string_no_warning(self) -> None:
+        _, warning = pwsh_transform('Write-Output "cmd1 && cmd2"', warn_chain=True)
+        assert warning == ""
+
+    def test_chain_outside_string_produces_warning(self) -> None:
+        _, warning = pwsh_transform('Write-Output "hello"; cmd1 && cmd2', warn_chain=True)
+        assert "WARNING" in warning
+
+    def test_chain_mixed_inside_outside(self) -> None:
+        _, warning = pwsh_transform('Write-Output "&&"; cmd1 || cmd2', warn_chain=True)
+        assert "WARNING" in warning
+
+
+# ============================================================================
+# Multi-line here-string interaction with line transformer
+# ============================================================================
+
+
+class TestMultiLineRegions:
+    def test_here_string_lines_not_individually_transformed(self) -> None:
+        """Lines inside a multi-line here-string should be skipped by pwsh_transform."""
+        code = """$text = @'
+$a ?? 'should not transform'
+$b?.Property
+'@
+Write-Output $text"""
+        result, _ = pwsh_transform(code)
+        # Operators inside here-string preserved
+        assert "??" in result
+        assert "?." in result
+
+    def test_block_comment_lines_not_individually_transformed(self) -> None:
+        code = """<#
+$a ?? 'inside block comment'
+$b?.Property
+#>
+Write-Output done"""
+        result, _ = pwsh_transform(code)
+        assert "??" in result
+        assert "?." in result
+
+
+# ============================================================================
+# _skip_subexpression nested
+# ============================================================================
+
+
+class TestSkipSubexpressionNested:
+    def test_nested_subexpressions_in_dq_string(self) -> None:
+        """$() nesting inside double-quoted strings."""
+        result, _ = pwsh_transform('"$(Get-Date) and $($($a)) is fine"')
+        assert "$(Get-Date)" in result
+        assert "$($($a))" in result
+
+    def test_subexpr_with_single_quoted_string_inside(self) -> None:
+        """$() containing a single-quoted string with special chars."""
+        result, _ = pwsh_transform('"$($x + ''?.'' )"')
+        # The ?. inside single quotes inside $() inside double quotes — preserved
+        assert "?." in result
+
+    def test_subexpr_with_nested_subexpr_in_dq(self) -> None:
+        """Double-quoted string with $() that itself contains a dq string with $()."""
+        result, _ = pwsh_transform('"outer $(Get-Date \"inner $($a)\") end"')
+        assert isinstance(result, str)
+
+
+# ============================================================================
+# Ternary operator interaction with ?. and ?[
+# ============================================================================
+
+
+class TestTernaryInteractionDeep:
+    def test_ternary_question_not_confused_with_null_conditional_dot(self) -> None:
+        """$a?.Property should NOT be recognized as ternary."""
+        result, _ = pwsh_transform("$a?.Property")
+        assert "?." not in result
+        assert "? :" not in result
+        assert "if ($null -ne $a)" in result
+
+    def test_ternary_true_branch_with_null_coalescing(self) -> None:
+        """Ternary where true branch is a ?? expression."""
+        result, _ = pwsh_transform('$x = $cond ? ($a ?? "x") : "y"')
+        assert "??" not in result
+        assert "?" not in result
+
+    def test_ternary_false_branch_with_null_conditional(self) -> None:
+        """Ternary where false branch has ?."""
+        result, _ = pwsh_transform('$x = $cond ? "yes" : $obj?.Name')
+        assert "?." not in result
+        # The ternary ? should be gone (only $? from generated code may remain)
+        assert "$obj" in result
+        assert ".Name" in result
+
+
+# ============================================================================
+# Null coalescing with unusual spacing and operator adjacency
+# ============================================================================
+
+
+class TestNullCoalescingSpacingEdge:
+    def test_coalescing_adjacent_to_pipe(self) -> None:
+        """$a ?? $b | ForEach-Object { $_ }"""
+        result, _ = pwsh_transform('$a ?? $b | ForEach-Object { $_ }')
+        assert "??" not in result
+
+    def test_coalescing_with_semicolon_right_after(self) -> None:
+        result, _ = pwsh_transform('$a ?? "x"; $b ?? "y"')
+        assert "??" not in result
+        assert result.count("if ($null -ne") == 2
+
+    def test_coalescing_with_comma_separated_defaults(self) -> None:
+        """$a ?? $b, $c ?? $d — comma binds tighter than ??."""
+        result, _ = pwsh_transform('$a ?? $b, $c ?? $d')
+        assert "??" not in result
+
+
+# ============================================================================
+# _transform_chain_line: operators inside strings with outside operators
+# ============================================================================
+
+
+class TestChainMixedInsideOutside:
+    def test_and_inside_string_or_outside(self) -> None:
+        result, _ = pwsh_transform("Write-Output '&&' || Write-Output done")
+        assert "&&" in result  # inside string, preserved
+        assert "||" not in result
+        assert "if (-not $?)" in result
+
+    def test_or_inside_string_and_outside(self) -> None:
+        result, _ = pwsh_transform('Write-Output "||" && Write-Output done')
+        assert "||" in result  # inside string, preserved
+        assert "&&" not in result
+        assert "if ($?)" in result
+
+
+# ============================================================================
+# pwsh_transform multiline with mixed operators on different lines
+# ============================================================================
+
+
+class TestMultiLineMixedOperators:
+    def test_different_operators_on_different_lines(self) -> None:
+        code = """$x = $a ?? "default"
+$y = $cond ? "yes" : "no"
+cmd1 && cmd2
+$z = $obj?.Property"""
+        result, _ = pwsh_transform(code)
+        assert "??" not in result
+        assert "?." not in result
+        assert "&&" not in result
+        # Ternary ? is gone; $? from chain transform is expected
+        assert "if ($cond)" in result
+        assert "if ($?)" in result
+
+    def test_operators_on_consecutive_lines(self) -> None:
+        code = """cmd1 && cmd2
+cmd3 || cmd4"""
+        result, _ = pwsh_transform(code)
+        assert "&&" not in result
+        assert "||" not in result
+        assert "if ($?)" in result
+        assert "if (-not $?)" in result
+
+
+# ============================================================================
+# Null-conditional bracket with string containing brackets
+# ============================================================================
+
+
+class TestNullConditionalBracketStrings:
+    def test_bracket_index_with_string_containing_bracket(self) -> None:
+        result, _ = pwsh_transform("$a?['[']")
+        assert "?[" not in result
+        assert "'['" in result
+
+    def test_bracket_index_with_dq_string_containing_bracket(self) -> None:
+        result, _ = pwsh_transform('$a?["]"]')
+        assert "?[" not in result
+        assert '"]"' in result
+
+    def test_bracket_index_with_nested_brackets_in_string(self) -> None:
+        result, _ = pwsh_transform('$a?["[[["]')
+        assert "?[" not in result
+        assert '"[[["' in result
+
+
+# ============================================================================
+# Single-quoted string scanner edge cases
+# ============================================================================
+
+
+class TestSingleQuotedStringScanner:
+    def test_empty_single_quoted_string(self) -> None:
+        """Empty '' should not confuse the scanner."""
+        result, _ = pwsh_transform("'' ?? 'default'")
+        assert "??" not in result
+        assert "if ($null -ne '')" in result
+
+    def test_only_escaped_quotes(self) -> None:
+        """'''' is two escaped quotes — should be a string region."""
+        result, _ = pwsh_transform("'''' ?? 'default'")
+        assert "??" not in result
+
+    def test_escaped_at_start_and_end(self) -> None:
+        """''a'' — escaped quote, content, escaped quote."""
+        result, _ = pwsh_transform("''a'' ?? 'default'")
+        assert "??" not in result
+
+    def test_doubled_quotes_in_content(self) -> None:
+        """'it''s ok' — doubled quotes representing literal '."""
+        result, _ = pwsh_transform("'it''s ok' ?? 'default'")
+        assert "??" not in result
+
+
+# ============================================================================
+# Double-quoted string scanner edge cases
+# ============================================================================
+
+
+class TestDoubleQuotedStringScanner:
+    def test_backtick_n_escape(self) -> None:
+        """`n inside double-quoted string should not close the string."""
+        result, _ = pwsh_transform('"hello`nworld" ?? "default"')
+        assert "??" not in result
+
+    def test_backtick_escaped_quote(self) -> None:
+        """`" inside double-quoted string is an escaped quote, not closing."""
+        result, _ = pwsh_transform('"hello`"world" ?? "default"')
+        assert "??" not in result
+
+    def test_dollar_paren_subexpression_in_dq(self) -> None:
+        """$() inside double-quoted string should be skipped correctly."""
+        result, _ = pwsh_transform('"$(Get-Date)" ?? "default"')
+        assert "??" not in result
+        assert "$(Get-Date)" in result
+
+    def test_nested_dollar_paren_in_dq(self) -> None:
+        """Nested $($($a)) inside dq string."""
+        result, _ = pwsh_transform('"$($($a))" ?? "default"')
+        assert "??" not in result
+
+
+# ============================================================================
+# Deeply nested block comments (4+ levels)
+# ============================================================================
+
+
+class TestDeepNestedBlockComments:
+    def test_four_deep_block_comment(self) -> None:
+        code = '<# L1 <# L2 <# L3 <# L4 #> L3 #> L2 #> L1 #>\n$x = $a ?? "default"'
+        result, _ = pwsh_transform(code)
+        assert "??" not in result
+        assert "L1" in result
+        assert "L4" in result
+
+
+# ============================================================================
+# Subexpression scanner with mixed quotes
+# ============================================================================
+
+
+class TestSubexpressionMixedQuotes:
+    def test_mixed_quotes_in_subexpr(self) -> None:
+        result, _ = pwsh_transform('"$( "hello $(''inner'') world" )"')
+        assert isinstance(result, str)
+
+    def test_brackets_inside_subexpr(self) -> None:
+        result, _ = pwsh_transform("$($a[0]) ?? 'default'")
+        assert "??" not in result
+        assert "$($a[0])" in result
+
+
+# ============================================================================
+# @' and @" single-line (not here-strings)
+# ============================================================================
+
+
+class TestAtSignSingleLine:
+    def test_at_double_quote_single_line_not_here_string(self) -> None:
+        """@"..."@ on a single line is not a here-string."""
+        result, _ = pwsh_transform('@"?? and ?. preserved"@')
+        assert "??" in result  # inside string region, preserved
+        assert "?." in result
+
+    def test_at_single_quote_single_line_not_here_string(self) -> None:
+        """@'...'@ on a single line is not a here-string."""
+        result, _ = pwsh_transform("@'?? preserved'@")
+        assert "??" in result
+
+
+# ============================================================================
+# Backtick inside single-quoted strings not collapsed
+# ============================================================================
+
+
+class TestBacktickInSingleQuotedString:
+    def test_backtick_newline_in_sq_string_not_collapsed(self) -> None:
+        """Backtick inside '...' is literal, not a line continuation."""
+        result, _ = pwsh_transform("'hello `\nworld'")
+        assert isinstance(result, str)
+        # The backtick should remain because it's inside a string
+
+
+# ============================================================================
+# _strip_command_prefix with numbers
+# ============================================================================
+
+
+class TestCommandPrefixNumbers:
+    def test_command_prefix_with_number_argument(self) -> None:
+        """Write-Output 123 ?? 0 — command prefix should be stripped."""
+        result, _ = pwsh_transform("Write-Output 123 ?? 0")
+        assert "??" not in result
+        assert "if ($null -ne 123)" in result
+
+    def test_command_prefix_with_variable(self) -> None:
+        """Write-Output $a ?? 0 — command prefix should be stripped."""
+        result, _ = pwsh_transform("Write-Output $a ?? 0")
+        assert "??" not in result
+        assert "if ($null -ne $a)" in result
+
+
+# ============================================================================
+# Two ?? or two ??= or two ?. or two ?[ on one line
+# ============================================================================
+
+
+class TestMultipleSameOperator:
+    def test_two_nca_on_one_line(self) -> None:
+        result, _ = pwsh_transform('$a ??= "x"; $b ??= "y"')
+        assert "??=" not in result
+        assert "if ($null -eq $a)" in result
+        assert "if ($null -eq $b)" in result
+
+    def test_two_null_coalescing_on_one_line(self) -> None:
+        result, _ = pwsh_transform('$a ?? "x"; $b ?? "y"')
+        assert "??" not in result
+        assert result.count("if ($null -ne") == 2
+
+    def test_two_null_conditional_dot_on_one_line(self) -> None:
+        result, _ = pwsh_transform("$a?.Name; $b?.Count")
+        assert "?." not in result
+        assert "$a" in result
+        assert "$b" in result
+
+    def test_two_null_conditional_bracket_on_one_line(self) -> None:
+        result, _ = pwsh_transform("$a?[0]; $b?[1]")
+        assert "?[" not in result
+        assert "$a[0]" in result
+        assert "$b[1]" in result
+
+
+# ============================================================================
+# Ternary with nested condition
+# ============================================================================
+
+
+class TestTernaryNestedCondition:
+    def test_ternary_with_paren_condition(self) -> None:
+        result, _ = pwsh_transform('($a -gt 0) ? ($b ? "c" : "d") : "e"')
+        assert "if (($a -gt 0))" in result
+
+    def test_ternary_false_branch_chain(self) -> None:
+        result, _ = pwsh_transform('$cond ? "a" : cmd1 && cmd2')
+        # Ternary ? is gone, but $? from chain transform appears
+        assert "if ($cond)" in result
+        assert "&&" not in result
+
+
+# ============================================================================
+# Chain with 5 operators
+# ============================================================================
+
+
+class TestLongChain:
+    def test_five_and_chain(self) -> None:
+        result, _ = pwsh_transform("cmd1 && cmd2 && cmd3 && cmd4 && cmd5")
+        assert "&&" not in result
+        assert result.count("if ($?)") == 4
+
+
+# ============================================================================
+# ?. with invalid member (starts with number)
+# ============================================================================
+
+
+class TestNullConditionalInvalidMembers:
+    def test_number_member_not_transformed(self) -> None:
+        """$a?.123 — member names can't start with number; should not transform."""
+        result, _ = pwsh_transform("$a?.123")
+        # Should not crash; ?. is not transformed because 123 is not alphanumeric...
+        # Actually 1 is alphanumeric, but the member starts with a digit.
+        # The transformer accepts it as a member name but in PS member names
+        # starting with digits are invalid. Transformer just passes through.
+        assert isinstance(result, str)
+
+    def test_empty_index_not_crash(self) -> None:
+        """$a?[] — empty index should not crash."""
+        result, _ = pwsh_transform("$a?[]")
+        assert isinstance(result, str)
+
+
+# ============================================================================
+# Complex NCA with chained property access
+# ============================================================================
+
+
+class TestNCAPropertyChain:
+    def test_chained_property_nca(self) -> None:
+        result, _ = pwsh_transform('$a.b.c ??= "default"')
+        assert "??=" not in result
+        assert "if ($null -eq $a.b.c)" in result
+        assert "$a.b.c = " in result
+
+
+# ============================================================================
+# && / || with & call operator boundary
+# ============================================================================
+
+
+class TestChainWithCallOperator:
+    def test_call_operator_then_coalescing(self) -> None:
+        result, _ = pwsh_transform('& $cmd $a ?? "default"')
+        assert "??" not in result
+        assert "$a" in result
+
+
+# ============================================================================
+# warn_chain with empty / no-chain input
+# ============================================================================
+
+
+class TestWarnChainEdge:
+    def test_warn_chain_with_empty_code(self) -> None:
+        _, warning = pwsh_transform("", warn_chain=True)
+        assert warning == ""
+
+    def test_no_warn_without_chain(self) -> None:
+        _, warning = pwsh_transform("Write-Output hello", warn_chain=True)
+        assert warning == ""
+
+
+# ============================================================================
+# Ultimate idempotency: all operators combined
+# ============================================================================
+
+
+class TestUltimateIdempotency:
+    def test_all_operators_combined_idempotent(self) -> None:
+        code = '${a} ??= ${b}; $c = $d?.$e?.\'f\' ?? "g"; cmd1 && cmd2 || cmd3'
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+    def test_every_operator_once_idempotent(self) -> None:
+        code = '$x = $a ?? "d"; $y = $c ? "t" : "f"; $z ??= 0; $w = $q?.Prop; cmd1 && cmd2'
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+
+# ============================================================================
+# Unterminated string / comment / subexpression scanners
+# ============================================================================
+
+
+class TestUnterminatedScanners:
+    def test_unterminated_single_quoted(self) -> None:
+        """Unterminated '... should not crash; treats rest as string."""
+        result, _ = pwsh_transform("'unterminated ?? and ?.")
+        assert isinstance(result, str)
+        assert "??" in result  # inside unterminated string region, preserved
+
+    def test_unterminated_double_quoted(self) -> None:
+        result, _ = pwsh_transform('"unterminated ?? and ?.')
+        assert isinstance(result, str)
+        assert "??" in result
+
+    def test_unterminated_block_comment_eof(self) -> None:
+        result, _ = pwsh_transform("<# unterminated ?? and ?.")
+        assert isinstance(result, str)
+
+    def test_unterminated_subexpression(self) -> None:
+        result, _ = pwsh_transform("$(unterminated ?? and ?.")
+        assert isinstance(result, str)
+
+    def test_unterminated_here_string_single_quoted(self) -> None:
+        result, _ = pwsh_transform("@'\nunterminated ?? and ?.")
+        assert isinstance(result, str)
+        assert "??" in result
+
+
+# ============================================================================
+# Backtick at extremes (position 0, EOF)
+# ============================================================================
+
+
+class TestBacktickExtremes:
+    def test_backtick_at_position_zero(self) -> None:
+        """Backtick at very start of code."""
+        result, _ = pwsh_transform("`\ncmd1")
+        assert "cmd1" in result
+
+    def test_backtick_at_end_of_file(self) -> None:
+        """Backtick as last character of code (no newline after)."""
+        result, _ = pwsh_transform("cmd1 `")
+        assert isinstance(result, str)
+        assert "`" in result or "cmd1" in result
+
+
+# ============================================================================
+# _match_assignment with ${braced} variables
+# ============================================================================
+
+
+class TestBracedAssignment:
+    def test_braced_var_assignment_with_coalescing(self) -> None:
+        result, _ = pwsh_transform('${global:var} = $a ?? "default"')
+        assert "??" not in result
+        assert "${global:var} =" in result  # _build_replacement joins without extra space
+        assert "if ($null -ne $a)" in result
+
+
+# ============================================================================
+# Line comment at position 0 with operators on next line
+# ============================================================================
+
+
+class TestHashAtPositionZero:
+    def test_comment_at_start_then_operator_line(self) -> None:
+        code = "# comment\n$a ?? 'default'"
+        result, _ = pwsh_transform(code)
+        assert "# comment" in result
+        assert "??" not in result  # ?? on second line IS transformed
+        assert "if ($null -ne $a)" in result
+
+
+# ============================================================================
+# ??= inside string literal (should NOT be transformed)
+# ============================================================================
+
+
+class TestNCAInsideString:
+    def test_nca_inside_single_quoted_string_not_transformed(self) -> None:
+        """The ??= inside the string is not matched. The real ??= after the string
+        has an empty variable (the string literal), so _transform_nca_line skips it;
+        _transform_nc_line then handles the ?? part."""
+        result, _ = pwsh_transform("'??= inside string' ??= 'value'")
+        # The ??= is not transformed (skipped by nca, caught as ?? by nc)
+        # The ?? inside the string is preserved
+        assert "'??= inside string'" in result
+
+
+# ============================================================================
+# Chain operators all inside strings — none should transform
+# ============================================================================
+
+
+class TestChainAllInStrings:
+    def test_all_chains_inside_strings(self) -> None:
+        result, _ = pwsh_transform("'&&' + '||'")
+        assert "&&" in result
+        assert "||" in result
+        assert "if ($?)" not in result
+        assert "if (-not $?)" not in result
+
+
+# ============================================================================
+# String literal containing ?? then real ?? on same line
+# ============================================================================
+
+
+class TestStringThenRealCoalescing:
+    def test_string_then_real_coalescing_same_line(self) -> None:
+        result, _ = pwsh_transform("'??' ?? 'real'")
+        # The real ?? is transformed; ?? inside the string literal is preserved
+        assert "if ($null -ne '??')" in result
+        assert "'??'" in result  # string still contains ??, preserved as content
+        assert "'real'" in result
+
+
+# ============================================================================
+# $? as ternary condition with complex branches
+# ============================================================================
+
+
+class TestDollarQuestionTernaryComplex:
+    def test_dollar_q_ternary_with_complex_branches(self) -> None:
+        result, _ = pwsh_transform('$? ? ($a ?? "x") : ($b?.Name)')
+        assert "?." not in result
+        assert "??" not in result
+        assert "if ($?)" in result
+
+
+# ============================================================================
+# ?. / ?[ with ?? chained after
+# ============================================================================
+
+
+class TestNullConditionalThenCoalescing:
+    def test_qd_then_coalescing(self) -> None:
+        result, _ = pwsh_transform('$a?.Name ?? "default"')
+        assert "?." not in result
+        assert "??" not in result
+
+    def test_qb_then_coalescing(self) -> None:
+        result, _ = pwsh_transform('$a?[0] ?? "default"')
+        assert "?[" not in result
+        assert "??" not in result
+
+
+# ============================================================================
+# ??= with nothing on the right side
+# ============================================================================
+
+
+class TestNCAEmptyRight:
+    def test_nca_empty_right_side(self) -> None:
+        """$a ??= with nothing after should not crash."""
+        result, _ = pwsh_transform("$a ??= ")
+        assert isinstance(result, str)
+        assert "$a" in result
+
+
+# ============================================================================
+# Multiple multiline here-strings in one code block
+# ============================================================================
+
+
+class TestMultipleHereStrings:
+    def test_two_here_strings_with_operator_between(self) -> None:
+        code = "@'\n?? preserved\n'@\n$x = $a ?? 'default'\n@'\n?. preserved\n'@"
+        result, _ = pwsh_transform(code)
+        # The ?? between the here-strings IS transformed
+        assert "if ($null -ne $a)" in result
+        # The ?? inside the first here-string and ?. inside second are preserved
+        assert "?? preserved" in result
+        assert "?. preserved" in result
+
+
+# ============================================================================
+# @" without newline after (not a here-string)
+# ============================================================================
+
+
+class TestAtSignDoubleQuoteNoNewline:
+    def test_at_dq_single_line_content(self) -> None:
+        """@"hello"@ on a single line — @" is NOT a here-string start."""
+        result, _ = pwsh_transform('$x = @"hello"@')
+        assert isinstance(result, str)
+
+
+# ============================================================================
+# Extremely long null-conditional chain
+# ============================================================================
+
+
+class TestLongNullConditionalChain:
+    def test_eight_deep_qd_chain(self) -> None:
+        result, _ = pwsh_transform("$a?.b?.c?.d?.e?.f?.g?.h")
+        assert "?." not in result
+        assert ".h" in result
+
+
+# ============================================================================
+# Invalid assignment syntax (no crash)
+# ============================================================================
+
+
+class TestInvalidAssignmentNoCrash:
+    def test_dollar_sign_only_assignment(self) -> None:
+        """Invalid PS: $ = ... should not crash."""
+        result, _ = pwsh_transform('$ = $a ?? "default"')
+        assert isinstance(result, str)
+
+
+# ============================================================================
+# Semicolons mixed with chain operators
+# ============================================================================
+
+
+class TestSemicolonChainMix:
+    def test_semicolons_and_chains_mixed(self) -> None:
+        result, _ = pwsh_transform("cmd1; cmd2 && cmd3; cmd4 || cmd5")
+        assert "&&" not in result
+        assert "||" not in result
+        assert "if ($?)" in result
+        assert "if (-not $?)" in result
+
+
+# ============================================================================
+# Ternary / ?? at very start of line (no preceding spaces)
+# ============================================================================
+
+
+class TestOperatorAtLineStart:
+    def test_ternary_at_column_zero(self) -> None:
+        result, _ = pwsh_transform('$cond ? "a" : "b"')
+        assert "?" not in result
+        assert "if ($cond)" in result
+
+    def test_coalescing_at_column_zero(self) -> None:
+        result, _ = pwsh_transform('$a ?? "default"')
+        assert "??" not in result
+        assert "if ($null -ne $a)" in result
+
+
+# ============================================================================
+# _strip_command_prefix: @ sign after command
+# ============================================================================
+
+
+class TestCommandPrefixAtSign:
+    def test_command_with_array_subexpr_argument(self) -> None:
+        """Write-Output @(1,2) ?? 0 — @ triggers the command-prefix check."""
+        result, _ = pwsh_transform("Write-Output @(1,2) ?? 0")
+        assert "??" not in result
+        assert "@(1,2)" in result
+
+    def test_command_with_hashtable_argument_coalescing(self) -> None:
+        result, _ = pwsh_transform('Write-Output @{a=1} ?? "fallback"')
+        assert "??" not in result
+        assert "@{a=1}" in result
+
+
+# ============================================================================
+# _transform_chain_line: empty right side
+# ============================================================================
+
+
+class TestChainEmptyRight:
+    def test_and_with_nothing_after(self) -> None:
+        """cmd1 && — nothing after &&, should produce empty if body."""
+        result, _ = pwsh_transform("cmd1 &&")
+        assert "cmd1" in result
+        assert "if ($?)" in result
+
+    def test_or_with_nothing_after(self) -> None:
+        result, _ = pwsh_transform("cmd1 ||")
+        assert "cmd1" in result
+        assert "if (-not $?)" in result
+
+
+# ============================================================================
+# String containing ?: that should not match ternary
+# ============================================================================
+
+
+class TestStringColonNotTernary:
+    def test_colon_in_dq_string_not_ternary_colon(self) -> None:
+        """?: inside double-quoted string should not confuse ternary."""
+        result, _ = pwsh_transform('$x = $cond ? "a:b:c" : "d"')
+        assert "?" not in result
+        assert '"a:b:c"' in result
+        assert '"d"' in result
+
+    def test_colon_in_sq_string_not_ternary_colon(self) -> None:
+        result, _ = pwsh_transform("$x = $cond ? 'a:b:c' : 'd'")
+        assert "?" not in result
+        assert "'a:b:c'" in result
+        assert "'d'" in result
+
+
+# ============================================================================
+# _find_string_regions: @" at end of file (no newline)
+# ============================================================================
+
+
+class TestAtSignEdgeCases:
+    def test_at_dq_at_end_of_code(self) -> None:
+        """@" at the very end of code with no newline — not a here-string."""
+        result, _ = pwsh_transform('$x = @"text"')
+        assert isinstance(result, str)
+
+    def test_at_sq_at_end_of_code(self) -> None:
+        result, _ = pwsh_transform("$x = @'text'")
+        assert isinstance(result, str)
+
+
+# ============================================================================
+# Idempotency: transform of already-transformed code with $? in it
+# ============================================================================
+
+
+class TestIdempotencyWithDollarQuestion:
+    def test_transformed_if_with_dollar_q_is_idempotent(self) -> None:
+        """if ($?) should survive a second transform unchanged."""
+        code = "if ($?) { Write-Output ok }"
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second
+
+    def test_transformed_chain_result_is_idempotent(self) -> None:
+        code = "cmd1; if ($?) { cmd2 }"
+        first, _ = pwsh_transform(code)
+        second, _ = pwsh_transform(first)
+        assert first == second

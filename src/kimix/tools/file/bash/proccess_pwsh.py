@@ -242,7 +242,7 @@ def _join_continuation_lines(code: str) -> str:
 # ---------------------------------------------------------------------------
 
 _ASSIGN_RE = re.compile(r"(.*?)(\$\w+(?::\w+)?(?:\.\w+)*)\s*=\s*$")
-_COMMAND_PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_\-]*\s+")
+_COMMAND_PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*\s+")
 _PS_KEYWORDS = {
     "begin", "break", "catch", "class", "continue", "data", "define", "do",
     "dynamicparam", "else", "elseif", "end", "enum", "exit", "filter", "finally",
@@ -288,9 +288,15 @@ def _strip_command_prefix(expr: str, start: int) -> tuple[str, int]:
 # Expression boundary helpers
 # ---------------------------------------------------------------------------
 
-def _find_expr_start(line: str, end: int, regions: list[tuple[int, int]]) -> int:
-    """Scan backwards from *end* to locate the start of the expression."""
+def _find_expr_start(line: str, end: int, regions: list[tuple[int, int]],
+                     extra_stop: str = "") -> int:
+    """Scan backwards from *end* to locate the start of the expression.
+
+    *extra_stop* can contain additional delimiter characters (e.g. "?:"
+    for null-conditional base scanning).
+    """
     depth = 0
+    stop_set = "=;|&," + extra_stop
     for i in range(end - 1, -1, -1):
         if not _outside_regions(regions, i):
             continue
@@ -301,7 +307,23 @@ def _find_expr_start(line: str, end: int, regions: list[tuple[int, int]]) -> int
             depth -= 1
             if depth < 0:
                 return i + 1
-        elif c in "=;|&," and depth == 0:
+        elif depth == 0 and c in stop_set:
+            # For ?/: in extra_stop, skip $? / :: / $scope: / ?. contexts.
+            if c == "?":
+                if i + 1 < len(line) and line[i + 1] == ".":
+                    continue  # ?. null-conditional, not ternary ?
+                if i > 0 and line[i - 1] == "$":
+                    continue  # $? automatic variable
+            elif c == ":":
+                if i + 1 < len(line) and line[i + 1] == ":":
+                    continue  # :: static member access
+                # Check for $scope: prefix
+                if i > 0 and (line[i - 1].isalnum() or line[i - 1] == "_"):
+                    j = i - 1
+                    while j > 0 and (line[j].isalnum() or line[j] == "_"):
+                        j -= 1
+                    if line[j] == "$":
+                        continue  # $scope:var
             return i + 1
     return 0
 
@@ -313,11 +335,12 @@ def _find_expr_end(line: str, start: int, regions: list[tuple[int, int]]) -> int
         c = line[i]
         if c == "#":
             if i > 0 and line[i - 1] == "<":
+                # Part of <# block-comment start; handled below by _outside_regions.
                 pass
             elif _outside_regions(regions, i):
-                return i
+                return i  # Bare # outside strings starts a line comment.
             else:
-                # Check if this is the start of a line-comment region
+                # Inside a region — if this # starts that region, it is a boundary.
                 idx = bisect_right(regions, (i, float("inf"))) - 1
                 if idx >= 0 and regions[idx][0] == i:
                     return i
@@ -334,12 +357,13 @@ def _find_expr_end(line: str, start: int, regions: list[tuple[int, int]]) -> int
     return len(line)
 
 
-def _expr_left(line: str, pos: int, regions: list[tuple[int, int]]) -> tuple[int, int]:
+def _expr_left(line: str, pos: int, regions: list[tuple[int, int]],
+                extra_stop: str = "") -> tuple[int, int]:
     """Return (start, end) of the expression immediately left of *pos*."""
     end = pos
     while end > 0 and line[end - 1] == " ":
         end -= 1
-    start = _find_expr_start(line, end, regions)
+    start = _find_expr_start(line, end, regions, extra_stop)
     return start, end
 
 
@@ -368,10 +392,24 @@ def _transform_nca_line(line: str) -> str:
                 while var_end > 0 and line[var_end - 1] == " ":
                     var_end -= 1
                 var_start = var_end
-                while var_start > 0 and (line[var_start - 1].isalnum() or line[var_start - 1] in ".$_:"):
+                # Handle braced variables: ${global:var} ??= value
+                if var_start > 0 and line[var_start - 1] == "}":
+                    # Scan backward to find matching ${ ... }
+                    bd = 1
                     var_start -= 1
-                if var_start > 0 and line[var_start - 1] == "$":
-                    var_start -= 1
+                    while var_start > 0 and bd > 0:
+                        if line[var_start - 1] == "}":
+                            bd += 1
+                        elif line[var_start - 1] == "{":
+                            bd -= 1
+                        var_start -= 1
+                    if var_start > 0 and line[var_start - 1] == "$":
+                        var_start -= 1
+                else:
+                    while var_start > 0 and (line[var_start - 1].isalnum() or line[var_start - 1] in ".$_:"):
+                        var_start -= 1
+                    if var_start > 0 and line[var_start - 1] == "$":
+                        var_start -= 1
                 var = line[var_start:var_end].strip()
                 if not var:
                     pos += 3
@@ -482,21 +520,20 @@ def _transform_chain_line(line: str) -> str:
     """Rewrite pipeline chain operators ``&&`` and ``||``."""
     while True:
         regions = _find_line_regions(line)
-        best_pos, best_op, best_len = -1, "", 0
-        for op, op_len in (("&&", 2), ("||", 2)):
-            pos = 0
-            while True:
-                idx = line.find(op, pos)
-                if idx == -1:
-                    break
+        # Find rightmost && or || outside string/comment regions.
+        best_pos, best_op = -1, ""
+        for op in ("&&", "||"):
+            idx = line.rfind(op)
+            while idx != -1:
                 if _outside_regions(regions, idx) and idx > best_pos:
-                    best_pos, best_op, best_len = idx, op, op_len
-                pos = idx + op_len
+                    best_pos, best_op = idx, op
+                    break
+                idx = line.rfind(op, 0, idx)
         if best_pos == -1:
             break
         condition = "$?" if best_op == "&&" else "-not $?"
         left = line[:best_pos].strip()
-        right = line[best_pos + best_len :].strip()
+        right = line[best_pos + 2:].strip()
         line = f"{left}; if ({condition}) {{ {right} }}"
     return line
 
@@ -509,7 +546,6 @@ def _transform_null_conditional_dot_line(line: str) -> str:
     """Rewrite null-conditional member access ``$obj?.Member``."""
     while True:
         regions = _find_line_regions(line)
-        depth_arr = _compute_depths(line, regions)
         matched = False
         pos = 0
         while pos < len(line) - 1:
@@ -519,7 +555,7 @@ def _transform_null_conditional_dot_line(line: str) -> str:
             if not _outside_regions(regions, idx):
                 pos = idx + 2
                 continue
-            expr_start, expr_end = _expr_left(line, idx, regions)
+            expr_start, expr_end = _expr_left(line, idx, regions, "?:")
             base = line[expr_start:expr_end].strip()
             base, expr_start = _strip_command_prefix(base, expr_start)
             if not base:
@@ -532,8 +568,33 @@ def _transform_null_conditional_dot_line(line: str) -> str:
                 while ms < len(line) and line[ms] == " ":
                     ms += 1
                 me = ms
-                while me < len(line) and (line[me].isalnum() or line[me] == "_"):
-                    me += 1
+                # Variable / quoted / plain identifier member name scanning.
+                c0 = line[ms] if ms < len(line) else ""
+                if c0 == "$":
+                    # Variable property name: $property, ${var}, $global:prop, etc.
+                    me = ms + 1
+                    if me < len(line) and line[me] == "{":
+                        # ${braced var}
+                        bd = 1
+                        me += 1
+                        while me < len(line) and bd > 0:
+                            if line[me] == "{":
+                                bd += 1
+                            elif line[me] == "}":
+                                bd -= 1
+                            me += 1
+                    else:
+                        while me < len(line) and (line[me].isalnum() or line[me] in "_:"):
+                            me += 1
+                elif c0 == "'":
+                    # Single-quoted member name: 'prop-name'
+                    me = _scan_single_quoted(line, ms)
+                elif c0 == '"':
+                    # Double-quoted member name: "prop-name"
+                    me = _scan_double_quoted(line, ms)
+                else:
+                    while me < len(line) and (line[me].isalnum() or line[me] == "_"):
+                        me += 1
                 if me == ms:
                     break
                 mem = line[ms:me]
@@ -581,7 +642,6 @@ def _transform_null_conditional_bracket_line(line: str) -> str:
     """Rewrite null-conditional index access ``$obj?[index]``."""
     while True:
         regions = _find_line_regions(line)
-        depth_arr = _compute_depths(line, regions)
         matched = False
         pos = 0
         while pos < len(line) - 1:
@@ -591,7 +651,7 @@ def _transform_null_conditional_bracket_line(line: str) -> str:
             if not _outside_regions(regions, idx):
                 pos = idx + 2
                 continue
-            expr_start, expr_end = _expr_left(line, idx, regions)
+            expr_start, expr_end = _expr_left(line, idx, regions, "?:")
             expr = line[expr_start:expr_end].strip()
             expr, expr_start = _strip_command_prefix(expr, expr_start)
             if not expr:
