@@ -5,7 +5,25 @@ from pathlib import Path
 import kimix.base as base
 from . import constants
 from .utils import _input, _split_text
-from kimix.base import print_success, print_error, print_warning, print_debug, colorful_text, Color
+
+
+def _read_multi_line(text_arr: list[str], *, allow_cancel: bool = True) -> tuple[list[str], bool]:
+    """Read multi-line input until /end or /cancel.
+
+    Returns (lines, cancelled) where lines are the text lines collected
+    (empty if /cancel was entered) and cancelled is True if /cancel was entered.
+    """
+    lines: list[str] = []
+    while True:
+        s = _input('', text_arr, multi_line_mode=True)
+        if s.strip() == '/end':
+            break
+        if allow_cancel and s.strip() == '/cancel':
+            return [], True
+        lines.append(s)
+    return lines, False
+
+from kimix.base import print_success, print_error, print_warning, print_info, print_debug, colorful_text, Color
 from kimix.utils import (
     clear_default_context, get_default_session, fix_error, compact_default_context,
     print_usage, set_ralph_loop,
@@ -116,12 +134,7 @@ def _cmd_context(task_split: list[str], text_arr: list[str]) -> tuple[None, bool
 
 def _cmd_script(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     print('\n>>>> Start input multiple-lines, end with /end')
-    text_lines: list[str] = []
-    while True:
-        s = _input('', text_arr)
-        if s.strip() == '/end':
-            break
-        text_lines.append(s)
+    text_lines, _ = _read_multi_line(text_arr, allow_cancel=False)
     text = '\n'.join(text_lines)
     try:
         exec(text, constants.globals_dict, constants.locals_dict)
@@ -182,15 +195,7 @@ def _cmd_plan(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     print(
         f'\n>>>> Start input requirement for plan, end with {colorful_text("/end", Color.YELLOW)}, '
         f'cancel with {colorful_text("/cancel", Color.YELLOW)}')
-    text: list[str] = []
-    while True:
-        s = _input('', text_arr)
-        if s.strip() == '/end':
-            break
-        if s.strip() == '/cancel':
-            text.clear()
-            break
-        text.append(s)
+    text, _ = _read_multi_line(text_arr)
     requirement = '\n'.join(text).strip()
     if not requirement:
         print_warning('No requirement provided.')
@@ -202,15 +207,7 @@ def _cmd_plan(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
 def _cmd_txt(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     print(
         f'\n>>>> Start input multiple-lines, end with {colorful_text('/end', Color.YELLOW)}, cancel with {colorful_text('/cancel', Color.YELLOW)}')
-    text: list[str] = []
-    while True:
-        s = _input('', text_arr)
-        if s.strip() == '/end':
-            break
-        if s.strip() == '/cancel':
-            text.clear()
-            break
-        text.append(s)
+    text, _ = _read_multi_line(text_arr)
     for i in _split_text(text, _command_map_keys):
         text_arr.append(i)
     return None, False
@@ -222,15 +219,10 @@ def _cmd_swarm(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
     print(
         f'\n>>>> Start input multiple-lines for swarm task, end with {colorful_text("/end", Color.YELLOW)}, '
         f'cancel with {colorful_text("/cancel", Color.YELLOW)}')
-    text: list[str] = []
-    while True:
-        s = _input('', text_arr)
-        if s.strip() == '/end':
-            break
-        if s.strip() == '/cancel':
-            print_warning('Swarm command cancelled.')
-            return None, False
-        text.append(s)
+    text, cancelled = _read_multi_line(text_arr)
+    if cancelled:
+        print_warning('Swarm command cancelled.')
+        return None, False
     task_prompt = '\n'.join(text)
     if not task_prompt.strip():
         print_warning('Empty task prompt, skipping swarm command.')
@@ -325,15 +317,7 @@ def _cmd_supervisor(task_split: list[str], text_arr: list[str]) -> tuple[None, b
     print(
         f'\n>>>> Start input for supervisor, end with {colorful_text("/end", Color.YELLOW)}, '
         f'cancel with {colorful_text("/cancel", Color.YELLOW)}')
-    text: list[str] = []
-    while True:
-        s = _input('', text_arr)
-        if s.strip() == '/end':
-            break
-        if s.strip() == '/cancel':
-            text.clear()
-            break
-        text.append(s)
+    text, _ = _read_multi_line(text_arr)
     task_prompt = '\n'.join(text).strip()
     if not task_prompt:
         print_warning('No input provided for supervisor.')
@@ -421,8 +405,8 @@ def _cmd_todo(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
         )
 
     try:
-        print(prompt_str)
-        # prompt(prompt_str=prompt_str)
+        print_info(prompt_str)
+        prompt(prompt_str=prompt_str)
     except Exception as e:
         print_error(f'Prompt failed: {e}')
 

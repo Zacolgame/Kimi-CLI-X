@@ -40,12 +40,13 @@ class Powershell(CallableTool2[PowershellParams]):
             raise SkipThisTool()
         
         # Pre-normalize forbidden commands once at init time for O(1) per-call lookup.
+        # PowerShell is case-insensitive; normalize to lowercase.
         raw_forbidden = _DEFAULT_FORBIDDEN_COMMANDS + self._session.custom_config.get("config_json", {}).get("forbidden_commands", [])
         self._forbidden_tokens: list[list[str]] = []
         for cmd in raw_forbidden:
             if not isinstance(cmd, str) or not cmd:
                 continue
-            self._forbidden_tokens.append(" ".join(cmd.split()).split())
+            self._forbidden_tokens.append(" ".join(cmd.split()).lower().split())
 
     async def __call__(self, params: PowershellParams) -> ToolReturnValue:
         """Execute the PowerShell command via the system PowerShell executable.
@@ -72,7 +73,8 @@ class Powershell(CallableTool2[PowershellParams]):
             warning_lines = "\n".join(w for w in transform_warnings)
             transform_warning = '\n[WARNING]' + warning_lines
         if self._forbidden_tokens:
-            cmd_tokens = " ".join(cmd.split()).split()
+            # PowerShell is case-insensitive: compare lowercased tokens.
+            cmd_tokens = " ".join(cmd.split()).lower().split()
             for forbidden_tokens in self._forbidden_tokens:
                 if len(forbidden_tokens) > len(cmd_tokens):
                     continue

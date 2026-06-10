@@ -12,6 +12,7 @@ import pytest
 _MODULE_PATH = Path(__file__).parent.parent / "src" / "kimix" / "tools" / "file" / "bash" / "proccess_pwsh.py"
 _spec = importlib.util.spec_from_file_location("proccess_pwsh", str(_MODULE_PATH))
 _mod = importlib.util.module_from_spec(_spec)
+sys.modules["proccess_pwsh"] = _mod  # fix Python 3.14 dataclass module resolution
 _spec.loader.exec_module(_mod)
 pwsh_transform = _mod.pwsh_transform
 
