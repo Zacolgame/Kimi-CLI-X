@@ -401,12 +401,30 @@ def _cmd_todo(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
         print_warning('No TODO comments found.')
         return None, False
 
-    for todo in todos:
-        prompt_str = f'implement TODO at {file_path} at line: {todo.line}\n\nComment: {todo.content.strip()}'
-        try:
-            prompt(prompt_str=prompt_str, session=get_default_session())
-        except Exception as e:
-            print_error(f'Prompt failed for TODO at line {todo.line}: {e}')
+    # Build formatted TODO items
+    if len(todos) == 1:
+        # Single TODO: short format, no numbering
+        single = todos[0]
+        todo_items = f'Line {single.line}: {single.content.strip()}'
+        prompt_str = (
+            f'Implement the TODO in {file_path}:\n'
+            f'{todo_items}'
+        )
+    else:
+        format_todo = lambda i, todo: f'{i}. Line {todo.line}: {todo.content.strip()}'
+        todo_lines = [format_todo(i, todo) for i, todo in enumerate(todos, 1)]
+        todo_items = '\n'.join(todo_lines)
+        prompt_str = (
+            f'Implement all TODOs in {file_path} at once:\n\n'
+            f'{todo_items}\n\n'
+            'Make sure to handle each TODO completely.'
+        )
+
+    try:
+        print(prompt_str)
+        # prompt(prompt_str=prompt_str)
+    except Exception as e:
+        print_error(f'Prompt failed: {e}')
 
     return None, False
 
