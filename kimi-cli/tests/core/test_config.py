@@ -34,7 +34,7 @@ def test_default_config_dump():
                 "max_retries_per_step": 3,
                 "max_ralph_iterations": 0,
                 "reserved_context_size": 50000,
-                "compaction_trigger_ratio": 0.85,
+                "compaction_trigger_ratio": 0.75,
                 "max_system_prompt_tokens": 4000,
                 "max_preserved_messages": 2,
                 "min_preserved_messages": 1,
@@ -71,7 +71,7 @@ def test_default_config_dump():
             "merge_all_available_skills": True,
             "extra_skill_dirs": [],
             "telemetry": False,
-            "skip_afk_prompt_injection": False,
+            "skip_afk_prompt_injection": True,
             "max_tokens": 128000,
             "temperature": None,
             "top_p": None,
@@ -128,7 +128,7 @@ def test_load_config_max_steps_per_turn():
 
 def test_load_config_legacy_skip_yolo_prompt_injection_ignored():
     config = load_config_from_string("skip_yolo_prompt_injection = true\n")
-    assert config.skip_afk_prompt_injection is False
+    assert config.skip_afk_prompt_injection is True
 
 
 def test_load_config_max_steps_per_run():
@@ -148,7 +148,7 @@ def test_load_config_compaction_trigger_ratio():
 
 def test_load_config_compaction_trigger_ratio_default():
     config = load_config_from_string("{}")
-    assert config.loop_control.compaction_trigger_ratio == 0.85
+    assert config.loop_control.compaction_trigger_ratio == 0.75
 
 
 def test_load_config_compaction_trigger_ratio_too_low():

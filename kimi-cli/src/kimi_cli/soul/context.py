@@ -70,6 +70,12 @@ class Context:
                     line_no=line_no,
                 )
 
+        # Strip stale system-reminder messages that were persisted to disk.
+        # They will be re-injected at the first step after restore.
+        from kimi_cli.soul.message import strip_system_reminders  # local import to avoid circular
+
+        strip_system_reminders(self._history)
+
         self._pending_token_estimate = estimate_text_tokens(messages_after_last_usage, model=self._model_name)
         return True
 

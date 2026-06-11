@@ -353,8 +353,7 @@ def test_grep_params_schema(grep_tool: Grep):
                 },
                 "output_mode": {
                     "default": "files_with_matches",
-                    "description": "Output format.",
-                    "type": "string",
+                    "description": "Output format: 'files_with_matches', 'count_matches', or 'content'.", 'enum': ['files_with_matches', 'count_matches', 'content'], "type": "string",
                 },
                 "-B": {
                     "anyOf": [{"type": "integer"}, {"type": "null"}],

@@ -32,6 +32,22 @@ def is_system_reminder_message(message: Message) -> bool:
     return isinstance(part, TextPart) and part.text.strip().startswith("<system-reminder>")
 
 
+def strip_system_reminders(history: list[Message]) -> int:
+    """Remove all standalone system-reminder user messages from *history* in-place.
+
+    Returns the number of messages removed.
+    """
+    removed = 0
+    i = 0
+    while i < len(history):
+        if is_system_reminder_message(history[i]):
+            history.pop(i)
+            removed += 1
+        else:
+            i += 1
+    return removed
+
+
 def tool_result_to_message(tool_result: ToolResult) -> Message:
     """Convert a tool result to a message."""
     if tool_result.return_value.is_error:

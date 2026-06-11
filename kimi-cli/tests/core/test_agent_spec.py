@@ -181,8 +181,8 @@ You are meant to be a fast agent. Complete the search request efficiently and re
             "kimi_cli.tools.file:Grep",
             "kimi_cli.tools.file:WriteFile",
             "kimi_cli.tools.file:EditFile",
-            "kimi_cli.tools.file:WriteFile",
-            "kimi_cli.tools.file:EditFile",
+            'kimi_cli.tools.web:SearchWeb',
+            'kimi_cli.tools.web:FetchURL',
         ]
     )
     sub_subagents = {

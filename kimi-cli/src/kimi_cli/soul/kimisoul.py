@@ -61,7 +61,7 @@ from kimi_cli.soul.dynamic_injection import (
     normalize_history,
 )
 from kimi_cli.soul.dynamic_injections.afk_mode import AfkModeInjectionProvider
-from kimi_cli.soul.message import check_message, system, system_reminder, tool_result_to_message
+from kimi_cli.soul.message import check_message, strip_system_reminders, system, system_reminder, tool_result_to_message
 from kimi_cli.soul.slash import registry as soul_slash_registry
 from kimi_cli.soul.toolset import KimiToolset
 from kimi_cli.tools.dmail import NAME as SendDMail_NAME
@@ -1076,6 +1076,13 @@ class KimiSoul:
         # ═══════════════════════════════════════════════════════════════════════
         # 2e.2. DYNAMIC INJECTION
         # ═══════════════════════════════════════════════════════════════════════
+
+        # ── 2e.2a. Strip stale system reminders from previous steps/turns ─────
+        # Providers re-inject fresh reminders below, so removing old ones is safe.
+        # Reset provider state so throttled providers (e.g., afk) can re-inject.
+        if strip_system_reminders(self._context._history):
+            await self._notify_injection_providers_compacted()
+
         auto_retrieval_injections = await self._maybe_auto_retrieve_history()
         injections = await self._collect_injections()
         # Prepend auto-retrieved injections so they appear before provider injections
