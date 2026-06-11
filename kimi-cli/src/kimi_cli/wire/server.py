@@ -336,6 +336,12 @@ class WireServer:
             self._soul.runtime.root_wire_hub.unsubscribe(self._root_hub_queue)
             self._root_hub_queue = None
 
+        if isinstance(self._soul, KimiSoul):
+            try:
+                await self._soul.close()
+            except Exception:
+                logger.exception("Failed to close KimiSoul during shutdown")
+
         await asyncio.gather(*self._dispatch_tasks, return_exceptions=True)
         self._dispatch_tasks.clear()
 

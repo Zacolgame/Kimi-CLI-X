@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
@@ -246,6 +247,9 @@ class KimiSoul:
 
         self._slash_commands = self._build_slash_commands()
         self._slash_command_map = self._index_slash_commands(self._slash_commands)
+
+        # Track rotated compaction export files for cleanup on close
+        self._rotated_paths: list[Path] = []
 
     @property
     def name(self) -> str:
@@ -1354,6 +1358,7 @@ class KimiSoul:
         # --- Export pre-compaction context ---
         
         rotated_path = self._runtime.session.work_dir / ".kimix_cache" / f"context_{secrets.token_hex(8)}.md"
+        self._rotated_paths.append(rotated_path)
         if rotated_path is not None:
             export_result = await perform_export(
                 history=list(self._context.history),
@@ -1439,6 +1444,26 @@ class KimiSoul:
             )
         )
         _hook_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+
+    async def close(self) -> None:
+        """Delete rotated compaction export files and context before process exit."""
+        for rotated_path in self._rotated_paths:
+            try:
+                await asyncio.to_thread(os.remove, str(rotated_path))
+                logger.debug("Removed rotated compaction export: {path}", path=rotated_path)
+            except FileNotFoundError:
+                logger.debug("Rotated compaction export already gone: {path}", path=rotated_path)
+            except Exception:
+                logger.exception("Failed to remove rotated compaction export: {path}", path=rotated_path)
+        self._rotated_paths.clear()
+
+        try:
+            await asyncio.to_thread(os.remove, str(self._context.file_backend))
+            logger.debug("Removed context file: {path}", path=self._context.file_backend)
+        except FileNotFoundError:
+            logger.debug("Context file already gone: {path}", path=self._context.file_backend)
+        except Exception:
+            logger.exception("Failed to remove context file: {path}", path=self._context.file_backend)
 
     @staticmethod
     def _is_retryable_error(exception: BaseException) -> bool:

@@ -384,6 +384,15 @@ class Agent:
     def get_system_prompt(self, is_compacting: bool = False, compact_export_path: str | None = None) -> str:
         if callable(self.system_prompt):
             if self.system_prompt_cached is None or is_compacting:
+                # Convert compact_export_path to a path relative to the work directory
+                if compact_export_path is not None:
+                    try:
+                        work_dir = self.runtime.builtin_args.KIMI_WORK_DIR
+                        if work_dir is not None:
+                            compact_export_path = str(Path(compact_export_path).relative_to(str(work_dir)))
+                    except ValueError:
+                        # If relpath fails (different drives on Windows), keep absolute
+                        pass
                 sig = inspect.signature(self.system_prompt)
                 if len(sig.parameters) >= 3:
                     self.system_prompt_cached = self.system_prompt(self.runtime, is_compacting, compact_export_path)
