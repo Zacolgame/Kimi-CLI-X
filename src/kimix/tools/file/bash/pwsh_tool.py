@@ -10,7 +10,7 @@ from kimi_cli.session import Session
 from kimi_cli.tools import SkipThisTool
 from kimi_cli.tools.display import ShellDisplayBlock
 from kimix.tools.file.bash.proccess_pwsh import pwsh_transform
-from kimix.tools.common import _maybe_export_output_async, ProcessTask, _DEFAULT_FORBIDDEN_COMMANDS
+from kimix.tools.common import _maybe_export_output_async, ProcessTask
 
 if TYPE_CHECKING:
     from kimi_agent_sdk import CallableTool2 as _CallableTool2
@@ -41,7 +41,7 @@ class Powershell(CallableTool2[PowershellParams]):
         
         # Pre-normalize forbidden commands once at init time for O(1) per-call lookup.
         # PowerShell is case-insensitive; normalize to lowercase.
-        raw_forbidden = _DEFAULT_FORBIDDEN_COMMANDS + self._session.custom_config.get("config_json", {}).get("forbidden_commands", [])
+        raw_forbidden = self._session.custom_config.get("config_json", {}).get("forbidden_commands", [])
         self._forbidden_keywords: list[str] = []
         seen: set[str] = set()
         for cmd in raw_forbidden:

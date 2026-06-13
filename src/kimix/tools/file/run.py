@@ -9,7 +9,7 @@ from kimi_cli.tools import SkipThisTool
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from pydantic import BaseModel, Field
 from kimi_cli.session import Session
-from kimix.tools.common import _maybe_export_output_async, _export_to_temp_file_async, ProcessTask, _DEFAULT_FORBIDDEN_COMMANDS
+from kimix.tools.common import _maybe_export_output_async, _export_to_temp_file_async, ProcessTask
 from kimi_cli.tools.display import ShellDisplayBlock
 from kimi_cli.share import get_share_dir
 import functools
@@ -111,9 +111,8 @@ class Run(CallableTool2[RunParams]):
         self.use_posix = sys.platform != "win32"
 
         # Pre-normalize forbidden commands once at init time for O(1) per-call lookup.
-        raw_forbidden = _DEFAULT_FORBIDDEN_COMMANDS + \
-            self._session.custom_config.get(
-                "config_json", {}).get("forbidden_commands", [])
+        raw_forbidden = self._session.custom_config.get(
+            "config_json", {}).get("forbidden_commands", [])
         self._forbidden_keywords: list[str] = []
         seen: set[str] = set()
         for cmd in raw_forbidden:
