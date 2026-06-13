@@ -290,17 +290,19 @@ async def prompt_plan_async(requirement: str, plan_file: str | Path = "plan.md")
             return
 
         plan_content = plan_file.read_text(encoding="utf-8", errors="replace")
+        plan_size = len(plan_content.encode("utf-8"))
         regular_session = _create_default_session()
+        if plan_size > 100 * 1024:
+            impl_prompt = f"Implement the plan in `{plan_file}`."
+            review_reminder = f"Review the plan in `{plan_file}` and ensure all tasks are completed."
+        else:
+            impl_prompt = f"Implement this plan:\n\n{plan_content}"
+            review_reminder = f"Review this plan and ensure all tasks are completed:\n\n{plan_content}"
         await prompt_async(
-            f"Please implement the following plan:\n\n{plan_content}",
+            impl_prompt,
             session=regular_session,
         )
 
-        review_reminder = (
-            "Please review the last plan that was just implemented and ensure all tasks are finished. "
-            "Verify every item in the plan has been completed successfully, and address any remaining issues.\n\n"
-            f"Plan:\n{plan_content}"
-        )
         await prompt_async(
             review_reminder,
             session=regular_session,

@@ -5,6 +5,7 @@ import orjson
 import sys
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
@@ -206,25 +207,30 @@ class Agent(CallableTool2):
                 message='Recursive sub-agent call detected',
                 brief='sub-agent recursively'
             )
-        if len(params.prompt.encode('utf-8')) > 128 * 1024:
-            return ToolError(
-                output='',
-                message='Prompt is too long (exceeds 128KB limit)',
-                brief='prompt too long'
-            )
         async with self._semaphore:
             try:
                 session, session_id, is_reused = await self._resolve_session(params)
                 store = _get_store(self._session)
                 entry = store.get(session_id)
 
+                # Handle very long prompts by offloading to a temp file
+                prompt_bytes = params.prompt.encode('utf-8')
+                if len(prompt_bytes) > 100 * 1024:
+                    cache_dir = Path('.kimix_cache')
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    temp_path = cache_dir / f'prompt_{uuid.uuid4().hex}.md'
+                    temp_path.write_bytes(prompt_bytes)
+                    task_prompt = f'Please read the task from `{temp_path}` and execute it.'
+                else:
+                    task_prompt = params.prompt
+
                 # Inject response to pending question if provided
-                prompt = params.prompt
+                prompt = task_prompt
                 if is_reused and entry and entry.pending_question and params.response:
                     prompt = (
                         f"The parent agent responded to your question "
                         f"({entry.pending_question}):\n\n{params.response}\n\n"
-                        f"Now, regarding your original task: {params.prompt}"
+                        f"Now, regarding your original task: {task_prompt}"
                     )
                     entry.pending_question = None
                     entry.state = "running"
@@ -263,7 +269,7 @@ class Agent(CallableTool2):
                     result = ToolError(
                         output=output_prefix + output_text,
                         message=err_msg,
-                        brief=f"sub-agent task failed: {params.prompt}",
+                        brief=f"sub-agent task failed: {task_prompt}",
                     )
                     result.extras = {
                         "session_id": session_id,
@@ -299,7 +305,7 @@ class Agent(CallableTool2):
                     output_prefix = f"Session ID: {session_id}\n\n"
                     result = ToolOk(
                         output=output_prefix + output_text,
-                        brief=params.prompt,
+                        brief=task_prompt,
                     )
                     result.extras = extras
                     return result
@@ -319,7 +325,7 @@ class Agent(CallableTool2):
                 output_prefix = f"Session ID: {session_id}\n\n"
                 result = ToolOk(
                     output=output_prefix + output_text,
-                    brief=params.prompt,
+                    brief=task_prompt,
                 )
                 result.extras = extras
                 return result

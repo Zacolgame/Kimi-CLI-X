@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from pathlib import Path
 
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
@@ -42,15 +43,10 @@ class Search(CallableTool2[IndexerParams]):
                 message='Recursive sub-agent call detected',
                 brief='sub-agent recursively'
             )
-        if len(params.prompt.encode('utf-8')) > 128 * 1024:
-            return ToolError(
-                output='',
-                message='Prompt is too long (exceeds 128KB limit)',
-                brief='prompt too long'
-            )
         async with self._semaphore:
             try:
                 output_strs = []
+                prompt = None
 
                 def output_function(fn: str, msg_type: MessageType) -> None:
                     if fn and msg_type != MessageType.Thinking:
@@ -112,7 +108,16 @@ class Search(CallableTool2[IndexerParams]):
                             if sub_custom_config is not None:
                                 sub_custom_config['is_sub_agent'] = True
                             import kimix.utils as utils
-                            prompt = f'Search:\n```\n{params.prompt}\n```in `{dest_path_str}`'
+                            nonlocal prompt
+                            prompt_bytes = params.prompt.encode('utf-8')
+                            if len(prompt_bytes) > 100 * 1024:
+                                cache_dir = Path('.kimix_cache')
+                                cache_dir.mkdir(parents=True, exist_ok=True)
+                                temp_path = cache_dir / f'prompt_{uuid.uuid4().hex}.md'
+                                temp_path.write_bytes(prompt_bytes)
+                                prompt = f'Read the task from `{temp_path}` and search in `{dest_path_str}`.'
+                            else:
+                                prompt = f'Search:\n```\n{params.prompt}\n```in `{dest_path_str}`'
                             await utils.prompt_async(prompt_str=prompt, session=session, output_function=output_function, info_print=False, cancel_callable=cancel_callable, merge_wire_messages=True)
                     except Exception as e:
                         err_msg_inner = str(e)
@@ -126,9 +131,9 @@ class Search(CallableTool2[IndexerParams]):
 
                 err_msg = await prompt_async()
                 if err_msg:
-                    return ToolError(output='\n'.join(output_strs), message=err_msg, brief=f'skill search task failed: {params.prompt}')
+                    return ToolError(output='\n'.join(output_strs), message=err_msg, brief=f'skill search task failed: {prompt or params.prompt}')
                 output = '\n'.join(output_strs)
-                return ToolOk(output=output, brief=params.prompt)
+                return ToolOk(output=output, brief=prompt or params.prompt)
             except Exception as exc:
                 return ToolError(
                     output="",
