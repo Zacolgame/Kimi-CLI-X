@@ -94,7 +94,7 @@ class Powershell(CallableTool2[PowershellParams]):
             refresh_env_from_registry()
 
         # Build the command line to pass to PowerShell -Command
-        process_task = ProcessTask('powershell', ["-NoP", "-NonI", "-Exec", "Bypass", "-NoL", "-C", cmd], None, None)
+        process_task = ProcessTask('powershell', ["-NoP", "-NonI", "-Exec", "Bypass", "-NoL", "-C", "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;", cmd], None, None)
         task_id = await process_task.start(self._session, "pwsh")
 
         await process_task.wait(params.timeout)
