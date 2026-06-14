@@ -47,7 +47,6 @@ class Python(CallableTool2[Params]):
     async def __call__(self, params: Params) -> ToolReturnValue:
         async with self._semaphore:
             # Force UTF-8 encoding for subprocess on Windows and Unix
-            env = {"PYTHONIOENCODING": "utf-8"}
             script_path: str | None = None
 
             # Windows CreateProcessW has a ~32767 char command-line limit.
@@ -60,7 +59,7 @@ class Python(CallableTool2[Params]):
             else:
                 args = ['-c', params.code]
 
-            task = ProcessTask(sys.executable, args, env=env)
+            task = ProcessTask(sys.executable, args)
             task_id = await task.start(self._session, "python")
 
             if params.run_in_background:

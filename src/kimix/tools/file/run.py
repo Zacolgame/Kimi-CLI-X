@@ -98,7 +98,6 @@ class Run(CallableTool2[RunParams]):
 
     def __init__(self, session: Session):
         import os
-        os.environ['PYTHONIOENCODING'] = 'utf-8'
         super().__init__()
         if USE_SYSTEM_SHELL:
             if sys.platform == "win32" and USE_SYSTEM_PWSH_ON_WINDOWS:

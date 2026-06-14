@@ -38,8 +38,24 @@ if TYPE_CHECKING:
     from kimi_agent_sdk import Session
 
 _threads: list[threading.Thread] = []
-
-
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+# 1a. Switch the Windows console code page to UTF-8 (CP 65001).
+#     This ensures that child processes reading from the console
+#     (including PowerShell's own [Console]::OutputEncoding when
+#     not overridden) see UTF-8 rather than cp1252.  The
+#     per-subprocess [Console]::OutputEncoding preamble is a
+#     belt-and-suspenders complement; this system-level setting
+#     catches everything else.
+try:
+    import ctypes
+    _CP_UTF8 = 65001
+    kernel32 = ctypes.windll.kernel32
+    kernel32.SetConsoleCP(_CP_UTF8)
+    kernel32.SetConsoleOutputCP(_CP_UTF8)
+except Exception:
+    # Non-fatal — the per-subprocess preamble still works.
+    pass
 class MessageType(Enum):
     """Message type for print_agent_json output function."""
     Text = "text"
