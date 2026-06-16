@@ -173,3 +173,39 @@ def test_prompt_async_works_without_cli_attribute(monkeypatch: Any) -> None:
     asyncio.run(prompt_mod.prompt_async("hello", session=session, info_print=False))
 
     assert session.prompts == ["hello"]
+
+
+def test_todos_are_cleared_after_prompt_async(monkeypatch: Any) -> None:
+    _suppress_stream(monkeypatch)
+    todos = [
+        TodoItemState(title="Analyze requirement", status="pending"),
+        TodoItemState(title="Implement helper", status="in_progress"),
+        TodoItemState(title="Run tests", status="done"),
+    ]
+    session = FakeSessionWithCLI(has_set_todo=True, todos=todos)
+
+    asyncio.run(prompt_mod.prompt_async("hello", session=session, info_print=False))
+
+    assert session._cli.session.state.todos == []
+
+
+def test_todos_cleared_even_when_reminder_fails(monkeypatch: Any) -> None:
+    _suppress_stream(monkeypatch)
+
+    async def failing_prompt(self: Any, prompt: str, *, merge_wire_messages: bool = False) -> Any:
+        if "system-reminder" in prompt:
+            raise RuntimeError("reminder failed")
+        self.last_prompt = prompt
+        self.prompts.append(prompt)
+        yield TextPart(text="prompt output")
+
+    monkeypatch.setattr(FakeSessionWithCLI, "prompt", failing_prompt)
+
+    todos = [
+        TodoItemState(title="Analyze requirement", status="pending"),
+    ]
+    session = FakeSessionWithCLI(has_set_todo=True, todos=todos)
+
+    asyncio.run(prompt_mod.prompt_async("hello", session=session, info_print=False))
+
+    assert session._cli.session.state.todos == []

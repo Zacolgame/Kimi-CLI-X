@@ -53,6 +53,20 @@ async def _maybe_build_todo_reminder(session: Session) -> str | None:
     return "\n".join(lines)
 
 
+async def _clear_session_todos(session: Session) -> None:
+    """Clear the todo-list stored on the session state, if present."""
+    cli = getattr(session, "_cli", None)
+    if cli is None:
+        return
+
+    state = getattr(getattr(cli, "session", None), "state", None)
+    if state is None:
+        return
+
+    if hasattr(state, "todos"):
+        state.todos = []
+
+
 async def _run_single_prompt(
     session: Session,
     prompt_str: str,
@@ -168,9 +182,12 @@ async def prompt_async(
         else:
             base._stream.colorful_print_word("prompt failed.", fg=Color.BRIGHT_RED, styles=[Style.BOLD], require_new_line=True)
 
+
     finally:
-        if close_session_after_prompt and session:
-            await close_session_async(session)
+        if session:
+            await _clear_session_todos(session)
+            if close_session_after_prompt:
+                await close_session_async(session)
         base._stream.print_word("", True)
 
 
