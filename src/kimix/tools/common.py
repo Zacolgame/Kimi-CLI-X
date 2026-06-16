@@ -190,6 +190,100 @@ async def _maybe_export_output_async(output: str, key: Path | None = None) -> st
     return output
 
 
+async def _summarize_long_output_async(session: Session, command: str, output: str) -> str:
+    """Process a long command output through an anonymous sub-agent.
+
+    The sub-agent is launched with ``agent_useless.json`` and is asked to
+    produce a concise summary of the command output for the parent coding
+    agent.
+
+    Args:
+        session: The parent tool session.
+        command: The command that produced the output.
+        output: The full command output.
+
+    Returns:
+        A concise summary, or the original output with a note if the
+        sub-agent could not be used.
+    """
+    import kimix.base as base
+    from kimix.base import MessageType
+    from kimix.utils import close_session_async, _create_session_async, prompt_async
+    from kimix.utils.system_prompt import SystemPromptType
+
+    custom_config = session.custom_config
+    chat_provider = custom_config.get("chat_provider")
+    default_sub_provider = (
+        base._default_sub_provider
+        if base._default_sub_provider is not None
+        else custom_config.get("provider_dict", base._default_provider)
+    )
+
+    sub_session_id = str(uuid.uuid4())
+    sub_session = None
+    try:
+        sub_session = await _create_session_async(
+            session_id=sub_session_id,
+            agent_file=base._default_agent_file_dir / "agent_useless.json",
+            agent_type=SystemPromptType.TrivialSubAgent,
+            provider_dict=default_sub_provider,
+            chat_provider=chat_provider,
+            resume=False,
+            anonymous=True,
+            max_ralph_iterations=0,
+        )
+        sub_custom_config = sub_session.get_custom_config()
+        if sub_custom_config is not None:
+            sub_custom_config["is_sub_agent"] = True
+
+        _OUTPUT_FILE_THRESHOLD = 100 * 1024
+        if len(output) > _OUTPUT_FILE_THRESHOLD:
+            temp_path, _ = await _export_to_temp_file_async(
+                key=None, content=output, ext=".txt"
+            )
+            display_temp_path = temp_path.replace("\\", "/")
+            output_section = (
+                f"Output saved to `{display_temp_path}` (>100KB). "
+                f"Read the file and summarize it for a coding agent."
+            )
+        else:
+            output_section = f"Output:\n{output}"
+
+        prompt = (
+            f"Command:\n{command}\n\n"
+            f"{output_section}\n\n"
+            "Summarize the output for a coding agent. "
+            "Highlight key results, errors, warnings, and next steps. "
+            "Do not run commands."
+        )
+
+        collected: list[str] = []
+
+        def output_function(text: str, msg_type: MessageType) -> None:
+            if text and msg_type == MessageType.Text:
+                collected.append(text)
+
+        await prompt_async(
+            prompt_str=prompt,
+            session=sub_session,
+            output_function=output_function,
+            info_print=False,
+            merge_wire_messages=True,
+        )
+        summary = "".join(collected).strip()
+        if not summary:
+            summary = "(no text output)"
+        return summary
+    except Exception as exc:
+        return f"[Summarization failed: {exc}]\n\n{output}"
+    finally:
+        if sub_session is not None:
+            try:
+                await close_session_async(sub_session)
+            except Exception:
+                pass
+
+
 class ProcessTask:
     """Run a subprocess in the background with stream output and input support."""
 

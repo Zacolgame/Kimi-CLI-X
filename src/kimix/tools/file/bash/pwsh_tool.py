@@ -10,7 +10,7 @@ from kimi_cli.session import Session
 from kimi_cli.tools import SkipThisTool
 from kimi_cli.tools.display import ShellDisplayBlock
 from kimix.tools.file.bash.proccess_pwsh import pwsh_transform
-from kimix.tools.common import _maybe_export_output_async, ProcessTask
+from kimix.tools.common import _maybe_export_output_async, _summarize_long_output_async, ProcessTask
 
 if TYPE_CHECKING:
     from kimi_agent_sdk import CallableTool2 as _CallableTool2
@@ -25,6 +25,11 @@ class PowershellParams(BaseModel):
         ge=3,
         le=900,
         description="Timeout in seconds."
+    )
+    max_output_length: int = Field(
+        default=65536,
+        ge=0,
+        description="Output length threshold. Exceeding it sends the output to an anonymous sub-agent for summarization. 0 disables."
     )
 
 class Powershell(CallableTool2[PowershellParams]):
@@ -113,8 +118,12 @@ class Powershell(CallableTool2[PowershellParams]):
         success = await process_task.stream.success() if process_task.stream else False
 
         if not success:
+            if params.max_output_length > 0 and len(output) > params.max_output_length:
+                output = await _summarize_long_output_async(self._session, cmd, output)
             return ToolError(output=output, message=f"`{cmd}` failed." + transform_warning, brief="Command execution failed")
 
+        if params.max_output_length > 0 and len(output) > params.max_output_length:
+            output = await _summarize_long_output_async(self._session, cmd, output)
         output = await _maybe_export_output_async(output)
         return ToolOk(
             output=output,

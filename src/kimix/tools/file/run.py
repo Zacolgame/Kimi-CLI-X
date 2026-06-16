@@ -9,7 +9,7 @@ from kimi_cli.tools import SkipThisTool
 from kimi_agent_sdk import CallableTool2, ToolError, ToolOk, ToolReturnValue
 from pydantic import BaseModel, Field
 from kimi_cli.session import Session
-from kimix.tools.common import _maybe_export_output_async, _export_to_temp_file_async, ProcessTask
+from kimix.tools.common import _maybe_export_output_async, _export_to_temp_file_async, _summarize_long_output_async, ProcessTask
 from kimi_cli.tools.display import ShellDisplayBlock
 from kimi_cli.share import get_share_dir
 import functools
@@ -88,6 +88,11 @@ class RunParams(BaseModel):
     run_in_background: bool = Field(
         default=False,
         description="Run the process in the background and return immediately."
+    )
+    max_output_length: int = Field(
+        default=65536,
+        ge=0,
+        description="Output length threshold. Exceeding it sends the output to an anonymous sub-agent for summarization. 0 disables."
     )
 
 
@@ -291,6 +296,16 @@ class Run(CallableTool2[RunParams]):
                 # Get output
                 output = await task.stream.pop_output() if task.stream else ""
 
+                # Optionally offload a very long output to a sub-agent
+                if (
+                    params.max_output_length > 0
+                    and len(output) > params.max_output_length
+                    and not params.output_path
+                ):
+                    output = await _summarize_long_output_async(
+                        self._session, params.command, output
+                    )
+
                 # Handle output export if needed
                 if params.output_path:
                     async with await anyio.open_file(params.output_path, 'w', encoding='utf-8', errors='replace') as f:
@@ -303,9 +318,14 @@ class Run(CallableTool2[RunParams]):
 
                 if not success:
                     if output and not params.output_path:
-                        temp_path, _ = await _export_to_temp_file_async(key=None, content=output, ext='.txt')
-                        display_temp_path = temp_path.replace("\\", "/")
-                        output = f'saved to file `{display_temp_path}`'
+                        if params.max_output_length > 0 and len(output) > params.max_output_length:
+                            output = await _summarize_long_output_async(
+                                self._session, params.command, output
+                            )
+                        else:
+                            temp_path, _ = await _export_to_temp_file_async(key=None, content=output, ext='.txt')
+                            display_temp_path = temp_path.replace("\\", "/")
+                            output = f'saved to file `{display_temp_path}`'
                     return ToolError(
                         output=output,
                         message=f"`{display_cmd}` failed",
