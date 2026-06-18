@@ -1,6 +1,7 @@
 from typing import Any, Callable, NamedTuple
 import os
 from pathlib import Path
+from datetime import datetime
 
 import kimix.base as base
 from . import constants
@@ -115,6 +116,40 @@ def _cmd_rename(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]
         import traceback
         print_error(f'Rename failed: {e}')
         print_error(traceback.format_exc())
+    return None, False
+
+
+def _cmd_sessions(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
+    from kaos.path import KaosPath
+    from kimi_cli.session import Session as CliSession
+
+    current = get_default_session()
+    current_id = None
+    if current is not None:
+        cli_session = current._cli.session
+        work_dir = cli_session.work_dir
+        current_id = cli_session.id
+    else:
+        work_dir = KaosPath('.')
+
+    try:
+        sessions = asyncio.run(CliSession.list(work_dir))
+    except Exception as e:
+        print_error(f'Failed to list sessions: {e}')
+        return None, False
+
+    if not sessions:
+        print_warning('No sessions found.')
+        return None, False
+
+    id_width = max(len('session id'), *(len(session.id) for session in sessions))
+    time_width = len('updated at')
+    title_width = len('title')
+    print_info(f'{" ":1}  {"session id":<{id_width}}  {"updated at":<{time_width}}  {"title":<{title_width}}')
+    for session in sessions:
+        marker = '*' if session.id == current_id else ' '
+        updated_at = datetime.fromtimestamp(session.updated_at).strftime('%Y-%m-%d %H:%M:%S')
+        print(f'{marker}  {session.id:<{id_width}}  {updated_at:<{time_width}}  {session.title}')
     return None, False
 
 
@@ -408,6 +443,7 @@ _COMMAND_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec('export', '/export:<path>', 'Export session messages to file', _cmd_export),
     CommandSpec('resume', '/resume:<id>', 'Close current session and resume a session by ID', _cmd_resume),
     CommandSpec('rename', '/rename:<id>', 'Rename the current session to a new ID', _cmd_rename),
+    CommandSpec('sessions', '/sessions', 'List resumable sessions for the current working directory', _cmd_sessions),
     CommandSpec('ralph', '/ralph:on', 'Enable Ralph mode', _cmd_ralph),
     CommandSpec('ralph', '/ralph:off', 'Disable Ralph mode', _cmd_ralph),
     CommandSpec('ralph', '/ralph:<num>', 'Set Ralph iterations', _cmd_ralph),
