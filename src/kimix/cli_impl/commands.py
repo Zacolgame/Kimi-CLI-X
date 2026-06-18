@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Callable, NamedTuple
 import os
 from pathlib import Path
 
@@ -36,9 +36,18 @@ from .init import init
 from kimix.dag import Executor
 import asyncio
 
+CommandHandler = Callable[[list[str], list[str]], tuple[str | None, bool]]
+
+
+class CommandSpec(NamedTuple):
+    name: str
+    usage: str
+    description: str
+    handler: CommandHandler
+
 
 def _cmd_help(task_split: list[str], text_arr: list[str]) -> tuple[None, bool]:
-    print(constants.HELP_STR)
+    print(get_help_str())
     return None, False
 
 
@@ -384,27 +393,54 @@ def _cmd_unknown(task_split: list[str], text_arr: list[str]) -> tuple[None, bool
     return None, False
 
 
-_command_map = {
-    'help': _cmd_help,
-    'clear': _cmd_clear,
-    'summarize': _cmd_summarize,
-    'exit': _cmd_exit,
-    'context': _cmd_context,
-    'script': _cmd_script,
-    'cmd': _cmd_cmd,
-    'cd': _cmd_cd,
-    'fix': _cmd_fix,
-    'txt': _cmd_txt,
-    'file': _cmd_file,
-    'plan': _cmd_plan,
-    'compact': _cmd_compact,
-    'export': _cmd_export,
-    'resume': _cmd_resume,
-    'rename': _cmd_rename,
-    'ralph': _cmd_ralph,
-    'cot': _cmd_cot,
-    'supervisor': _cmd_supervisor,
-    'init': _cmd_init,
-    'todo': _cmd_todo
-}
+_COMMAND_SPECS: tuple[CommandSpec, ...] = (
+    CommandSpec('file', '/file:<path>', 'Load a file and execute its content line by line', _cmd_file),
+    CommandSpec('todo', '/todo:<path>', 'Scan code file for TODO comments and prompt agent to implement them', _cmd_todo),
+    CommandSpec('clear', '/clear', 'Clear the conversation context', _cmd_clear),
+    CommandSpec('summarize', '/summarize', 'Summarize conversation context to memory', _cmd_summarize),
+    CommandSpec('exit', '/exit', 'Exit the program', _cmd_exit),
+    CommandSpec('help', '/help', 'Show this help message', _cmd_help),
+    CommandSpec('context', '/context', 'Print context usage', _cmd_context),
+    CommandSpec('fix', '/fix:<command>', 'Run a command and fix errors if any', _cmd_fix),
+    CommandSpec('txt', '/txt', 'Input multiple line text', _cmd_txt),
+    CommandSpec('init', '/init', 'Initialize default LLM config', _cmd_init),
+    CommandSpec('compact', '/compact', 'Compact conversation context', _cmd_compact),
+    CommandSpec('export', '/export:<path>', 'Export session messages to file', _cmd_export),
+    CommandSpec('resume', '/resume:<id>', 'Close current session and resume a session by ID', _cmd_resume),
+    CommandSpec('rename', '/rename:<id>', 'Rename the current session to a new ID', _cmd_rename),
+    CommandSpec('ralph', '/ralph:on', 'Enable Ralph mode', _cmd_ralph),
+    CommandSpec('ralph', '/ralph:off', 'Disable Ralph mode', _cmd_ralph),
+    CommandSpec('ralph', '/ralph:<num>', 'Set Ralph iterations', _cmd_ralph),
+    CommandSpec('cot', '/cot:on', 'Enable manually CoT mode', _cmd_cot),
+    CommandSpec('cot', '/cot:off', 'Disable manually CoT mode', _cmd_cot),
+    CommandSpec('plan', '/plan', 'Plan a long-term task, step-by-step, then execute', _cmd_plan),
+    CommandSpec('script', '/script', 'Write python script', _cmd_script),
+    CommandSpec('cmd', '/cmd:<command>', 'Execute system command', _cmd_cmd),
+    CommandSpec('cd', '/cd:<path>', 'Change directory', _cmd_cd),
+    CommandSpec('supervisor', '/supervisor', 'Start a supervisor session', _cmd_supervisor),
+)
+
+
+def get_command_descriptions() -> dict[str, str]:
+    descriptions: dict[str, str] = {}
+    for spec in _COMMAND_SPECS:
+        descriptions.setdefault(spec.name, spec.description)
+    return descriptions
+
+
+def get_help_str() -> str:
+    max_usage_len = max(len(spec.usage) for spec in _COMMAND_SPECS)
+    lines = [
+        constants.OPTIONS_HELP_STR,
+        'Available commands:',
+        f'  {"<path>":<{max_usage_len}}  - Same as /file:<path>',
+    ]
+    for spec in _COMMAND_SPECS:
+        usage = colorful_text(spec.usage, fg=Color.YELLOW)
+        lines.append(f'  {usage:<{max_usage_len}}  - {spec.description}')
+    lines.extend(['', 'Or enter any prompt to send to the agent.'])
+    return '\n'.join(lines)
+
+
+_command_map = {spec.name: spec.handler for spec in _COMMAND_SPECS}
 _command_map_keys = set(_command_map.keys())
